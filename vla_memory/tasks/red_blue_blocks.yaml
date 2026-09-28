@@ -1,0 +1,87 @@
+# Reference task of the framework: a Franka arm, a red and a blue 4 cm cube on a table; pick up and put back the red
+# cube, then the blue one. The VLA policy was trained on the four skill strings below (one per frame of the demos).
+name: red_blue_blocks
+objects: [red, blue]
+verbs: ["pick up", "place"]
+skill_template: "{verb} the {object} block"
+object_field: "{object}_cube"
+object_noun: cube
+object_states: [on_table, held_lifted, held_at_table, unsure]
+max_plan_len: 8            # most skills in one plan (the plan schema's maxItems)
+
+# Completion rule per verb, inserted verbatim into every monitor query (criteria v7, 2026-09-28). The numbers are the
+# ones measured on this robot: the hand is 11-13 cm above the table when it grasps or releases a cube, the demos'
+# lift ends 24-27 cm up; "pick up" is done at 22 cm (cube about 9 cm up), "place" only after the release AND the
+# retreat upwards, because that is where the demo labels switch to the next skill.
+criteria:
+  "pick up": >-
+    Complete only when BOTH hold: (1) the gripper is closed on the {object} cube (closedness >= 0.30; the fingers stop
+    on the 4 cm cube at about 0.45) AND (2) the hand is at least 22 cm above the table, i.e. the cube has been lifted
+    about 9 cm or more (the hand is only 11-13 cm above the table when it grasps a cube resting on the table). NOT
+    complete while the gripper is open, while it is closing down at the table, or while the hand is still below 22 cm
+    during the lift.
+  "place": >-
+    Complete only when ALL THREE hold: (1) the gripper has opened again (closedness < 0.30) after having been closed on
+    the {object} cube, (2) the {object} cube rests on the table (it is no longer between the fingers), AND (3) the hand
+    has moved back UP away from the cube: hand at least 19 cm above the table (it is only 11-13 cm above the table
+    while it releases a cube resting on the table). NOT complete while the cube is still held, while it is being
+    lowered, or while the open hand is still down at the cube.
+
+system_head: >-
+  You are the task monitor of a robot arm: a Franka Panda with a two-finger parallel gripper, working on a table with
+  a red cube and a blue cube (4 cm). The robot executes one skill at a time from a fixed plan. Judge only from the
+  images; be conservative: when in doubt, the skill is not yet complete. Answer with JSON only.
+system_ext: >-
+  You receive one image from a fixed external camera that sees the table, both cubes and the arm. A cube is 'held'
+  only if it is between the gripper fingers and moves with the hand; a lifted cube is clearly above the table
+  surface, with visible space between the cube and the table.
+system_both: >-
+  You receive two images. Picture 1 is a fixed external camera that sees the table, both cubes and the arm: use it
+  to judge where the cubes are and whether one is lifted; note that the hand often hides a held cube from this
+  camera. Picture 2 is the wrist camera, which looks straight down past the fingers; the fingers themselves are
+  outside its view. HOW TO READ PICTURE 2: (a) a cube HELD between the fingers appears as a tall coloured band cut
+  off at the LEFT EDGE of Picture 2, filling the left border from top to bottom; (b) a cube lying ON THE TABLE below
+  the gripper appears as a complete square with all four edges visible, somewhere in the middle of Picture 2 (large
+  when the gripper is low, smaller when it has moved up); (c) an empty gripper over the table shows only the table
+  surface, possibly with a small cube far away. A complete square in Picture 2 is NEVER a held cube.
+plan_system: >-
+  You decompose a natural-language instruction for a single robot arm into an ordered list of skills. The arm knows
+  exactly these skills and nothing else: {skills}. 'pick up the X block' grasps the X cube and lifts it; 'place the X
+  block' puts the held X cube back on the table and releases it. A cube that was picked up must be placed before
+  another cube is picked up, and the task always ends with the arm empty: every cube that is picked up is placed back
+  before the end, even when the instruction does not say so explicitly. Output the skills in the order the
+  instruction requires.
+
+# Proprioception sentence: the gripper counts as closed above this closedness; the note is appended to the height.
+proprio:
+  closed_threshold: 0.30
+  history: 12
+  note: "the hand is 11-13 cm above the table when it grasps or releases a cube resting on the table"
+
+# Retrieval key of the exemplar store: colour thumbnail + blob statistics of each object colour, per camera.
+# A colour rule is a list of [channel_a, channel_b, min_difference] conditions on the RGB values (all must hold).
+fingerprint:
+  thumbnail: [12, 16]
+  w_thumb: 1.0
+  w_blob: 6.0
+  colours:
+    red:  [[r, g, 60], [r, b, 60]]
+    blue: [[b, r, 40], [b, g, 15]]
+
+# How the demonstrations of THIS task are labelled for the exemplar store (labels.PhaseLabeller): the demo generator
+# stores a waypoint phase per frame; each object has a close/lift/lower/open phase, and the phases map to skills.
+demo_phases:
+  phase_to_skill: {"0-3": 0, "4-6": 1, "7-11": 2, "12-14": 3}
+  per_object:
+    red:  {close: 2, lift: 3, lower: 4, open: 5}
+    blue: {close: 10, lift: 11, lower: 12, open: 13}
+  high_phases: [0, 7, 8]          # hand high above the table for the whole phase
+  low_phases: [2, 5, 10, 13]      # hand down at the table
+  rising_phases: [3, 6, 11, 14]   # hand high in the second half of the phase; other phases: high in the first half
+
+instruction_examples:
+  - "Pick up the red block with your arm, place it back, and then grasp the blue block."
+  - "First, grasp the red block and put it back down. After that, pick up the blue block."
+  - "Lift the red block, place it down, and then pick up the blue block."
+  - "Grab the red block, return it to the table, and proceed to pick up the blue block."
+  - "Take the red block, put it down, and grab the blue block."

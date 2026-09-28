@@ -1,0 +1,105 @@
+"""Task specification: everything the planner needs to know about ONE task, loaded from a YAML/JSON file.
+
+A task is a set of objects, a set of verbs, a skill template that combines them into the exact prompt strings the
+VLA policy was trained on, a written completion rule per verb, the system texts for the planner model, and the
+JSON schemas that force the model's answers into the skill vocabulary. Nothing task-specific lives in the code:
+see vla_memory/tasks/red_blue_blocks.yaml for the reference task (two cubes, pick and place).
+"""
+from __future__ import annotations
+
+import dataclasses
+import json
+import pathlib
+from typing import Any
+
+_HERE = pathlib.Path(__file__).resolve().parent
+
+
+def _load_file(path) -> dict:
+    p = pathlib.Path(path); text = p.read_text()
+    if p.suffix.lower() in (".yaml", ".yml"):
+        try:
+            import yaml
+        except ImportError as e:  # pragma: no cover
+            raise ImportError("pip install pyyaml to load YAML task files, or use JSON") from e
+        return yaml.safe_load(text)
+    return json.loads(text)
+
+
+@dataclasses.dataclass
+class TaskSpec:
+    name: str
+    objects: list[str]                      # e.g. ["red", "blue"]
+    verbs: list[str]                        # e.g. ["pick up", "place"]; this order is the default plan per object
+    skill_template: str                     # e.g. "{verb} the {object} block"
+    criteria: dict[str, str]                # verb -> completion rule text, may use {object}
+    system_head: str
+    system_ext: str                         # appended to system_head when only the external camera is used
+    system_both: str                        # appended when external + wrist camera are used
+    plan_system: str                        # may use {skills}
+    object_states: list[str]                # enum of the per-object state field
+    object_field: str = "{object}_cube"     # JSON field name of an object's state in the monitor answer
+    object_noun: str = "cube"               # how objects are called in generated text ("red cube = on_table")
+    max_plan_len: int = 8                   # most skills in one plan (the plan schema's maxItems)
+    proprio: dict[str, Any] = dataclasses.field(default_factory=dict)      # closed_threshold, note
+    fingerprint: dict[str, Any] = dataclasses.field(default_factory=dict)  # colour rules for ColourBlobFingerprint
+    demo_phases: dict[str, Any] = dataclasses.field(default_factory=dict)  # phase table for labels.PhaseLabeller
+    instruction_examples: list[str] = dataclasses.field(default_factory=list)
+    notes: str = ""
+
+    # ------------------------------------------------------------------ construction
+    @classmethod
+    def load(cls, path) -> "TaskSpec":
+        d = _load_file(path)
+        known = {f.name for f in dataclasses.fields(cls)}
+        return cls(**{k: v for k, v in d.items() if k in known})
+
+    @classmethod
+    def default(cls) -> "TaskSpec":
+        return cls.load(_HERE / "tasks" / "red_blue_blocks.yaml")
+
+    # ------------------------------------------------------------------ skills
+    @property
+    def skills(self) -> tuple[str, ...]:
+        """All legal skill strings, object-major (all verbs of object 1, then object 2, ...)."""
+        return tuple(self.skill(v, o) for o in self.objects for v in self.verbs)
+
+    def skill(self, verb: str, obj: str) -> str:
+        return self.skill_template.format(verb=verb, object=obj)
+
+    def parse_skill(self, skill: str) -> tuple[str, str]:
+        """skill string -> (verb, object); raises ValueError for strings outside the vocabulary."""
+        for o in self.objects:
+            for v in self.verbs:
+                if self.skill(v, o) == skill:
+                    return v, o
+        raise ValueError(f"unknown skill {skill!r}")
+
+    def field(self, obj: str) -> str:
+        return self.object_field.format(object=obj)
+
+    # ------------------------------------------------------------------ prompts and schemas
+    def plan_system_text(self) -> str:
+        return self.plan_system.format(skills="; ".join(f'"{s}"' for s in self.skills))
+
+    def system_text(self, use_wrist: bool) -> str:
+        return self.system_head + (self.system_both if use_wrist else self.system_ext)
+
+    def criterion(self, skill: str) -> str:
+        verb, obj = self.parse_skill(skill)
+        return self.criteria[verb].format(object=obj)
+
+    def plan_schema(self) -> dict:
+        return {"type": "object",
+                "properties": {"plan": {"type": "array", "items": {"type": "string", "enum": list(self.skills)},
+                                        "minItems": 1, "maxItems": self.max_plan_len}},
+                "required": ["plan"], "additionalProperties": False}
+
+    def monitor_schema(self, brief: bool = False) -> dict:
+        props = {self.field(o): {"type": "string", "enum": list(self.object_states)} for o in self.objects}
+        props.update({"gripper": {"type": "string", "enum": ["open", "closed", "unsure"]},
+                      "gripper_high_above_table": {"type": "boolean"}})
+        if not brief:
+            props["reason"] = {"type": "string", "maxLength": 160}
+        props["current_skill_done"] = {"type": "boolean"}
+        return {"type": "object", "properties": props, "required": list(props), "additionalProperties": False}

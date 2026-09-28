@@ -11,6 +11,8 @@ The top level holds what every memory method shares; each method is a subpackage
 Methods:
   planner_loop               a VLM planner decomposes the instruction into skills, monitors progress at every policy
                              call with the help of an exemplar store, and hands the policy one skill at a time
+  history_appended           the policy keeps the full instruction and receives a text summary of the completed
+                             skills; the planner loop's monitor supplies the events (in development)
 """
 from .task import TaskSpec
 from .vlm import VLMBackend, OpenAICompatibleVLM, encode_png

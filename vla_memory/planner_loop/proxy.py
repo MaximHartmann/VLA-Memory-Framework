@@ -46,6 +46,10 @@ class PlannerProxy:
         self._log = open(log_path, "a") if log_path else None
         self.episode = None; self.n = 0
 
+    def prompt_for(self, instruction: str, rec: dict) -> str:
+        """The prompt handed to the policy after a planner decision: here the current skill. Other methods override."""
+        return rec.get("skill_after", self.planner.current_skill)
+
     def infer(self, obs: dict) -> dict:
         t0 = time.perf_counter()
         ctrl = {k[len(CTRL):]: v for k, v in obs.items() if isinstance(k, str) and k.startswith(CTRL)}
@@ -64,7 +68,7 @@ class PlannerProxy:
             images = [np.asarray(ext)] + ([np.asarray(wri)] if wri is not None else [])
             proprio = {k: float(ctrl[k]) for k in ("gripper_closedness", "hand_height") if k in ctrl}
             rec = self.planner.observe(images, int(ctrl.get("step", -1)), proprio=proprio or None)
-            prompt = rec.get("skill_after", self.planner.current_skill)
+            prompt = self.prompt_for(task, rec)
             info.update(queried=rec["queried"], advanced=rec["advanced"], vlm_ms=rec.get("ms", 0.0),
                         skill_index=self.planner.idx, vlm=rec.get("vlm"), recovery=rec.get("recovery_inserted"))
         elif self.mode == "oracle":
@@ -128,7 +132,7 @@ def build_planner(args, task: TaskSpec) -> Planner:
                    log=(args.log + ".planner.jsonl") if args.log else None, use_wrist=not args.no_wrist, upscale=args.upscale)
 
 
-def main(argv=None):
+def main(argv=None, proxy_cls=PlannerProxy):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--listen-port", type=int, required=True)
     ap.add_argument("--upstream-port", type=int, required=True)
@@ -156,8 +160,8 @@ def main(argv=None):
     task = TaskSpec.load(args.task) if args.task else TaskSpec.default()
     planner = build_planner(args, task) if args.mode == "vlm" else None
     transport = OpenPIWebsocketTransport(args.upstream_host, args.upstream_port)
-    proxy = PlannerProxy(transport, args.mode, planner, args.log, image_keys=args.image_keys)
-    meta = {"proxy": "vla_memory.planner_loop.proxy", "mode": args.mode, "task": task.name,
+    proxy = proxy_cls(transport, args.mode, planner, args.log, image_keys=args.image_keys)
+    meta = {"proxy": proxy_cls.__module__, "mode": args.mode, "task": task.name,
             "vlm": args.vlm_model if args.mode == "vlm" else None, "memory": args.memory, "k": args.k}
     asyncio.run(ProxyServer(proxy, args.listen_host, args.listen_port, meta)._run())
 

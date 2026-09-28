@@ -44,6 +44,7 @@ class TaskSpec:
     proprio: dict[str, Any] = dataclasses.field(default_factory=dict)      # closed_threshold, note
     fingerprint: dict[str, Any] = dataclasses.field(default_factory=dict)  # colour rules for ColourBlobFingerprint
     demo_phases: dict[str, Any] = dataclasses.field(default_factory=dict)  # phase table for labels.PhaseLabeller
+    history: dict[str, Any] = dataclasses.field(default_factory=dict)      # history-appended prompt: prefix, none, events, joiner, suffix
     instruction_examples: list[str] = dataclasses.field(default_factory=list)
     notes: str = ""
 

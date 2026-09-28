@@ -14,7 +14,7 @@ import numpy as np
 
 class MemoryStore:
     def __len__(self) -> int:
-        raise NotImplementedError
+        raise NotImplementedError #is there anything stored?
 
     def retrieve(self, images: Sequence[np.ndarray], k: int = 4, exclude_episode: Any = None) -> list[tuple[int, float]]:
         """Return [(entry index, similarity)] of the k entries most similar to the current images."""

@@ -79,6 +79,16 @@ demo_phases:
   low_phases: [2, 5, 10, 13]      # hand down at the table
   rising_phases: [3, 6, 11, 14]   # hand high in the second half of the phase; other phases: high in the first half
 
+# History-appended prompt (method 2): the text appended to the unchanged instruction, one past-tense phrase per
+# completed skill, e.g. "... History: picked up the red block, placed the red block." The reference policy of that
+# method was trained on exactly these strings (empty history: "History: none yet.").
+history:
+  prefix: " History: "
+  none: "none yet"
+  events: {"pick up": "picked up the {object} block", "place": "placed the {object} block"}
+  joiner: ", "
+  suffix: "."
+
 instruction_examples:
   - "Pick up the red block with your arm, place it back, and then grasp the blue block."
   - "First, grasp the red block and put it back down. After that, pick up the blue block."

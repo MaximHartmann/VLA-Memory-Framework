@@ -32,11 +32,19 @@ block."). A policy fine-tuned on such prompts can tell apart phases that look al
 from the same monitor as in the planner loop, so the method reuses the planner and the exemplar memory and changes
 only the prompt handed to the policy. The policy for the reference task is still in training.
 
+## Third approach: RECAP-lite, learning from the policy's own rollouts (in evaluation)
+
+The third method writes memory into the policy's weights. The policy is run in the simulator, its successful executions are
+kept and turned into training episodes, and the policy is fine-tuned on them mixed with a few original demonstrations. It is the
+filtered-cloning core of RECAP (π*0.6), without the value function, the advantage indicator and the human corrections. The result
+is a drop-in replacement for the policy inside the planner loop; nothing changes at run time. Its 100-seed evaluation is running.
+
 ## Implemented methods
 
 | method | memory used | status | documentation |
 |---|---|---|---|
 | Planner loop with exemplar memory | working memory (plan and current step, held by the proxy); long-term memory (retrieval store of labelled past observations) | implemented and evaluated in simulation | [docs/methods/planner_loop.md](docs/methods/planner_loop/README.md) |
 | History-appended prompt | working memory rendered into the policy's prompt (the completed skills as text); events from the planner loop's monitor and exemplar memory | in development | [docs/methods/history_appended/README.md](docs/methods/history_appended/README.md) |
+| RECAP-lite | parametric long-term memory: the policy's own successful rollouts written into its weights by fine-tuning | in evaluation | [docs/methods/recap/README.md](docs/methods/recap/README.md) |
 
 Each further method gets its own page under `docs/methods/` and a row in this table.

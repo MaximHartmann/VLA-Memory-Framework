@@ -55,3 +55,14 @@ The figure has three panels.
 The figure shows the reference instantiation used for the evaluation (a simulated Franka arm, a pi0.5 policy trained
 on the four skills of a red/blue block task, Qwen3.8-27B as the planner). Every named component is a replaceable part
 of the framework.
+
+## Results on the reference task
+
+On 100 fresh seeds of the red/blue task (500 steps each, same seeds for every run), the loop with the Qwen planner and
+the criteria of the task file completes 69 of 100 full tasks with an empty store (mean sequence score 5.62), 91 with
+20 stored episodes (6.65), 88 with 50 (6.51) and 88 with 100 (6.54); the ground-truth oracle that switches the skill
+at the labelled moment completes 92 (6.64), and the same policy without any memory or planner, driven by the full
+instruction alone, completes 11 (2.33). The whole gain lies between 0 and 20 stored episodes; from 20 upwards the
+planner is at the oracle's level and the differences are within noise. The per-episode videos, results files, traces and planner decision logs of these runs are on
+the evaluation host under `/data/mhartmann/eval_final_v2_planner_mem{0,20,100}/`, `/data/mhartmann/eval_final_v2_planner/`
+(50 episodes) and `/data/mhartmann/eval_final_v2_n100/` (oracle and memoryless baselines).

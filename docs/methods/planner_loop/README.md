@@ -66,3 +66,17 @@ instruction alone, completes 11 (2.33). The whole gain lies between 0 and 20 sto
 planner is at the oracle's level and the differences are within noise. The per-episode videos, results files, traces and planner decision logs of these runs are on
 the evaluation host under `/data/mhartmann/eval_final_v2_planner_mem{0,20,100}/`, `/data/mhartmann/eval_final_v2_planner/`
 (50 episodes) and `/data/mhartmann/eval_final_v2_n100/` (oracle and memoryless baselines).
+
+## Sources
+
+The loop combines ideas from the following papers; none of them is used as code.
+
+| paper | what the planner loop takes from it |
+|---|---|
+| SayCan (Ahn et al., 2022, arXiv 2204.01691) | a language model plans over a fixed library of trained skills; our plan step is restricted to the policy's skill vocabulary by the answer schema |
+| Inner Monologue (Huang et al., CoRL 2022, arXiv 2207.05608) | closed-loop planning: success detection fed back to the planner after every step; its catalogue of detector errors (false negatives cause useless retries, false positives create partial observability) motivates the vote threshold, the minimum number of questions per skill and the forward-only pointer |
+| Vision-Language Models as Success Detectors, SuccessVQA (Du et al., 2023, arXiv 2303.07280) | a VLM judges from images whether a step is complete; this is the monitor query |
+| Hi Robot (Shi et al., 2025, arXiv 2502.19417) | a high-level VLM issues short language commands to a low-level VLA from the current images; the same two-level split, here prompt-based and with an explicit state instead of a trained high-level model |
+| Gemini Robotics 1.5 (DeepMind, 2025, arXiv 2510.03342) | an orchestrator model decomposes the task and runs success detection to decide when to switch skills |
+| VoLo (Chen et al., 2026, arXiv 2606.07723) and 2AM (Hu et al., 2026, arXiv 2609.11308) | an orchestrator VLM drives a stateless pi0.5 and holds the task state; VoLo's finding that completion-monitor errors dominate is why the long-term memory serves the monitor |
+| RAP (Kagaya et al., 2024, arXiv 2402.03610) and JARVIS-1 (Wang et al., 2023, arXiv 2311.05997) | retrieval of past experience as in-context examples for a planner; the exemplar store is such a memory with a hand-made visual key, feeding few-shot examples to the monitor |

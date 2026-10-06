@@ -1,0 +1,665 @@
+diff --git a/scripts/serve_policy.py b/scripts/serve_policy.py
+index 30f121a..fa0efcb 100644
+--- a/scripts/serve_policy.py
++++ b/scripts/serve_policy.py
+@@ -7,6 +7,7 @@ import tyro
+ 
+ from openpi.policies import policy as _policy
+ from openpi.policies import policy_config as _policy_config
++import openpi.transforms as _transforms
+ from openpi.serving import websocket_policy_server
+ from openpi.training import config as _config
+ 
+@@ -28,6 +29,10 @@ class Checkpoint:
+     config: str
+     # Checkpoint directory (e.g., "checkpoints/pi0_aloha_sim/exp/10000").
+     dir: str
++    # Inference-time centre crop of the exterior (non-wrist) image, matching the scale of training's
++    # RandomCrop(95%)+Resize augmentation: 0 = off, 0.95 = openpi's training crop.
++    # See transforms.CenterCropResizeImages.
++    center_crop: float = 0.0
+ 
+ 
+ @dataclasses.dataclass
+@@ -89,8 +94,13 @@ def create_policy(args: Args) -> _policy.Policy:
+     """Create a policy from the given arguments."""
+     match args.policy:
+         case Checkpoint():
++            extra = []
++            if args.policy.center_crop:
++                extra.append(_transforms.CenterCropResizeImages(args.policy.center_crop))
++                logging.info(f"exterior image centre crop at inference: {args.policy.center_crop}")
+             return _policy_config.create_trained_policy(
+-                _config.get_config(args.policy.config), args.policy.dir, default_prompt=args.default_prompt
++                _config.get_config(args.policy.config), args.policy.dir, default_prompt=args.default_prompt,
++                extra_input_transforms=extra,
+             )
+         case Default():
+             return create_default_policy(args.env, default_prompt=args.default_prompt)
+diff --git a/scripts/train.py b/scripts/train.py
+index 5d28941..abb3f27 100644
+--- a/scripts/train.py
++++ b/scripts/train.py
+@@ -1,6 +1,7 @@
+ import dataclasses
+ import functools
+ import logging
++import os
+ import platform
+ from typing import Any
+ 
+@@ -28,6 +29,16 @@ import openpi.training.utils as training_utils
+ import openpi.training.weight_loaders as _weight_loaders
+ 
+ 
++# Buffer donation for init and the train step. Upstream always donates.
++# OPENPI_DONATE=0 turns it off, which is what JAX_DEBUG_NANS=True does silently
++# (jax/_src/pjit.py). So the one clean 2-GPU red_blue run (2327884) trained
++# without donation. With donation on, 2-GPU runs die at step 0: XLA cannot place
++# a 4 GiB temporary buffer in the fragmented memory pool (jobs 2327940/2327941).
++# In-place (donated) optimizer updates are also a suspect for the Adam-state
++# corruption seen on 4 GPUs.
++DONATE = os.environ.get("OPENPI_DONATE", "1") != "0"
++
++
+ def init_logging():
+     """Custom logging format for better readability."""
+     level_mapping = {"DEBUG": "D", "INFO": "I", "WARNING": "W", "ERROR": "E", "CRITICAL": "C"}
+@@ -125,7 +136,7 @@ def init_train_state(
+     # Initialize the train state and mix in the partial params.
+     train_state = jax.jit(
+         init,
+-        donate_argnums=(1,),  # donate the partial params buffer.
++        donate_argnums=(1,) if DONATE else (),  # donate the partial params buffer.
+         in_shardings=replicated_sharding,
+         out_shardings=state_sharding,
+     )(init_rng, partial_params)
+@@ -133,6 +144,42 @@ def init_train_state(
+     return train_state, state_sharding
+ 
+ 
++def _accumulated_value_and_grad(
++    config: _config.TrainConfig,
++    state: training_utils.TrainState,
++    rng: at.KeyArrayLike,
++    observation: _model.Observation,
++    actions: _model.Actions,
++) -> tuple[at.Array, nnx.State]:
++    """Mean loss and gradient over config.grad_accum_steps micro-batches, run one at a time.
++
++    The micro-batches go through a lax.scan, so only one micro-batch's activations are live at a
++    time; the gradient sum is kept in float32. Each micro-batch draws its own flow-matching noise and
++    time from fold_in(rng, i). The result has the same structure as the single-batch gradient.
++    """
++    k = config.grad_accum_steps
++    trainable = state.params.filter(config.trainable_filter)
++    frozen = state.params.filter(nnx.Not(config.trainable_filter))
++
++    def micro_loss(trainable, rng, observation, actions):
++        model = nnx.merge(state.model_def, trainable, frozen)
++        model.train()
++        return jnp.mean(model.compute_loss(rng, observation, actions, train=True))
++
++    def body(carry, xs):
++        loss_sum, grad_mean = carry
++        (observation, actions), i = xs
++        loss, grads = jax.value_and_grad(micro_loss)(trainable, jax.random.fold_in(rng, i), observation, actions)
++        # Scale inside the loop so the carry already holds the mean: no separate averaged copy of the
++        # gradients after the scan (each copy is ~1.7 GiB for pi05 LoRA).
++        return (loss_sum + loss, jax.tree.map(lambda m, g: m + g / k, grad_mean, grads)), None
++
++    micro = jax.tree.map(lambda x: x.reshape(k, x.shape[0] // k, *x.shape[1:]), (observation, actions))
++    init = (jnp.zeros((), jnp.float32), jax.tree.map(jnp.zeros_like, trainable))
++    (loss_sum, grad_mean), _ = jax.lax.scan(body, init, (micro, jnp.arange(k)))
++    return loss_sum / k, grad_mean
++
++
+ @at.typecheck
+ def train_step(
+     config: _config.TrainConfig,
+@@ -155,7 +202,10 @@ def train_step(
+ 
+     # Filter out frozen params.
+     diff_state = nnx.DiffState(0, config.trainable_filter)
+-    loss, grads = nnx.value_and_grad(loss_fn, argnums=diff_state)(model, train_rng, observation, actions)
++    if config.grad_accum_steps == 1:
++        loss, grads = nnx.value_and_grad(loss_fn, argnums=diff_state)(model, train_rng, observation, actions)
++    else:
++        loss, grads = _accumulated_value_and_grad(config, state, train_rng, observation, actions)
+ 
+     params = state.params.filter(config.trainable_filter)
+     updates, new_opt_state = state.tx.update(grads, state.opt_state, params)
+@@ -191,14 +241,90 @@ def train_step(
+     return new_state, info
+ 
+ 
++# Weight guard. The A4000 red_blue runs corrupt early, at step 8-24:
++#   - 4 GPUs: Adam's first moment for a few elements of action_in_proj/bias and
++#     time_mlp_in/bias was overwritten with ~1e27, and the weights followed.
++#   - 2 GPUs: a SigLIP bias went NaN; in another run the loss jumped 5x with an
++#     infinite gradient norm.
++# param_norm above skips biases, so the logs never showed the first kind, and
++# those runs trained on garbage for hours.
++#
++# After every step the guard checks the loss, the gradient norm and the largest
++# |value| of every parameter array, frozen ones included. It aborts (exit code
++# 3) on any non-finite value, or on any array above its limit: max(OPENPI_WEIGHT_GUARD,
++# 2 x the array's max at the start), capped at 1e6. pi05_base's SigLIP biases
++# reach 67, so a flat limit would fire at once. The cap still catches a run
++# resumed from an already-corrupted checkpoint. AdamW moves a weight by well
++# under 1 over a whole run, so real training never reaches a limit.
++#
++# Results are read only when they are already on the host, or in bulk at each
++# log step, so the guard adds no host sync. OPENPI_WEIGHT_GUARD=0 turns it off.
++WEIGHT_GUARD = float(os.environ.get("OPENPI_WEIGHT_GUARD", "10.0"))
++GUARD_EXIT_CODE = 3
++
++
++def _param_arrays(params: nnx.State) -> dict[str, at.Array]:
++    flat = traverse_util.flatten_dict(params.to_pure_dict())
++    return {"/".join(map(str, k)): v for k, v in flat.items()}
++
++
++@jax.jit
++def _absmax(arrays: dict[str, at.Array]) -> dict[str, at.Array]:
++    # Reduce in each array's own dtype and cast only the scalar, so no fp32 copy of the embedding.
++    return {k: jnp.max(jnp.abs(v)).astype(jnp.float32) for k, v in arrays.items()}
++
++
++def _guard_limits(params: nnx.State) -> dict[str, float]:
++    start = jax.device_get(_absmax(_param_arrays(params)))
++    return {k: min(max(WEIGHT_GUARD, 2 * float(v)), 1e6) for k, v in start.items()}
++
++
++def _check_guard(
++    pending: list[tuple[int, dict[str, at.Array], dict[str, at.Array]]], limits: dict[str, float], *, wait: bool
++) -> float:
++    """Check queued per-step results in step order; consumed entries are removed from `pending`.
++
++    Each entry is (step, per-array max |value|, the step's info dict). Without `wait`, stops at the
++    first entry still being computed. Returns the worst value/limit ratio among the checked entries,
++    and exits the process if any entry has a non-finite value or breaks a limit.
++    """
++    worst = 0.0
++    while pending:
++        step, absmax, info = pending[0]
++        if not wait and not all(v.is_ready() for v in (*absmax.values(), *info.values())):
++            break
++        pending.pop(0)
++        bad = [f"{k} = {float(v):.4g}" for k, v in jax.device_get(info).items() if not np.isfinite(float(v))]
++        for name, value in jax.device_get(absmax).items():
++            value = float(value)
++            if not np.isfinite(value) or value > limits[name]:
++                bad.append(f"max |{name}| = {value:.4g} (limit {limits[name]:.4g})")
++            else:
++                worst = max(worst, value / limits[name])
++        if bad:
++            logging.error(f"WEIGHT GUARD: after step {step}: {'; '.join(bad[:5])}. Training is corrupted; aborting.")
++            raise SystemExit(GUARD_EXIT_CODE)
++    return worst
++
++
+ def main(config: _config.TrainConfig):
+     init_logging()
+-    logging.info(f"Running on: {platform.node()}")
++    logging.info(f"Running on: {platform.node()}  (buffer donation {'on' if DONATE else 'off'})")
+ 
+     if config.batch_size % jax.device_count() != 0:
+         raise ValueError(
+             f"Batch size {config.batch_size} must be divisible by the number of devices {jax.device_count()}."
+         )
++    if (config.batch_size // config.grad_accum_steps) % jax.device_count() != 0:
++        raise ValueError(
++            f"Micro-batch {config.batch_size} / {config.grad_accum_steps} must be divisible by the number of "
++            f"devices {jax.device_count()}."
++        )
++    if config.grad_accum_steps > 1:
++        logging.info(
++            f"Gradient accumulation: {config.grad_accum_steps} micro-batches of "
++            f"{config.batch_size // config.grad_accum_steps} per step (effective batch {config.batch_size})"
++        )
+ 
+     jax.config.update("jax_compilation_cache_dir", str(epath.Path("~/.cache/jax").expanduser()))
+ 
+@@ -244,7 +370,7 @@ def main(config: _config.TrainConfig):
+         functools.partial(train_step, config),
+         in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
+         out_shardings=(train_state_sharding, replicated_sharding),
+-        donate_argnums=(1,),
++        donate_argnums=(1,) if DONATE else (),
+     )
+ 
+     start_step = int(train_state.step)
+@@ -255,14 +381,30 @@ def main(config: _config.TrainConfig):
+         dynamic_ncols=True,
+     )
+ 
++    guard_limits: dict[str, float] = _guard_limits(train_state.params) if WEIGHT_GUARD > 0 else {}
++    guard_pending: list[tuple[int, dict[str, at.Array], dict[str, at.Array]]] = []
++    guard_worst = 0.0
++    if guard_limits:
++        logging.info(
++            f"Weight guard on: {len(guard_limits)} parameter arrays, limits "
++            f"{min(guard_limits.values()):.3g}-{max(guard_limits.values()):.3g}; also loss and grad_norm"
++        )
++
+     infos = []
+     for step in pbar:
+         with sharding.set_mesh(mesh):
+             train_state, info = ptrain_step(train_rng, train_state, batch)
+         infos.append(info)
++        if guard_limits:
++            guard_pending.append((step, _absmax(_param_arrays(train_state.params)), info))
++            guard_worst = max(guard_worst, _check_guard(guard_pending, guard_limits, wait=False))
+         if step % config.log_interval == 0:
+             stacked_infos = common_utils.stack_forest(infos)
+             reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
++            if guard_limits:
++                guard_worst = max(guard_worst, _check_guard(guard_pending, guard_limits, wait=True))
++                reduced_info["weight_guard"] = guard_worst  # worst value/limit this interval; >1 aborts
++                guard_worst = 0.0
+             info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
+             pbar.write(f"Step {step}: {info_str}")
+             wandb.log(reduced_info, step=step)
+@@ -270,6 +412,8 @@ def main(config: _config.TrainConfig):
+         batch = next(data_iter)
+ 
+         if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps - 1:
++            if guard_limits:  # never write a checkpoint the guard has not cleared (the last step is not a log step)
++                _check_guard(guard_pending, guard_limits, wait=True)
+             _checkpoints.save_state(checkpoint_manager, train_state, data_loader, step)
+ 
+     logging.info("Waiting for checkpoint manager to finish")
+diff --git a/src/openpi/policies/policy_config.py b/src/openpi/policies/policy_config.py
+index 6570df0..3ba01eb 100644
+--- a/src/openpi/policies/policy_config.py
++++ b/src/openpi/policies/policy_config.py
+@@ -1,3 +1,4 @@
++from collections.abc import Sequence
+ import logging
+ import os
+ import pathlib
+@@ -22,6 +23,7 @@ def create_trained_policy(
+     default_prompt: str | None = None,
+     norm_stats: dict[str, transforms.NormStats] | None = None,
+     pytorch_device: str | None = None,
++    extra_input_transforms: Sequence[transforms.DataTransformFn] = (),
+ ) -> _policy.Policy:
+     """Create a policy from a trained checkpoint.
+ 
+@@ -37,6 +39,8 @@ def create_trained_policy(
+             from the checkpoint directory.
+         pytorch_device: Device to use for PyTorch models (e.g., "cpu", "cuda", "cuda:0").
+                       If None and is_pytorch=True, will use "cuda" if available, otherwise "cpu".
++        extra_input_transforms: Applied after the model transforms (i.e. to the resized images), e.g.
++            transforms.CenterCropResizeImages to match the image scale of training's augmentation.
+ 
+     Note:
+         The function automatically detects whether the model is PyTorch-based by checking for the
+@@ -80,6 +84,7 @@ def create_trained_policy(
+             *data_config.data_transforms.inputs,
+             transforms.Normalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
+             *data_config.model_transforms.inputs,
++            *extra_input_transforms,
+         ],
+         output_transforms=[
+             *data_config.model_transforms.outputs,
+diff --git a/src/openpi/training/config.py b/src/openpi/training/config.py
+index 4ca47e1..eedae90 100644
+--- a/src/openpi/training/config.py
++++ b/src/openpi/training/config.py
+@@ -20,6 +20,7 @@ import openpi.models.tokenizer as _tokenizer
+ import openpi.policies.aloha_policy as aloha_policy
+ import openpi.policies.droid_policy as droid_policy
+ import openpi.policies.libero_policy as libero_policy
++import openpi.policies.red_blue_policy as red_blue_policy
+ import openpi.shared.download as _download
+ import openpi.shared.normalize as _normalize
+ import openpi.training.droid_rlds_dataset as droid_rlds_dataset
+@@ -355,6 +356,80 @@ class LeRobotLiberoDataConfig(DataConfigFactory):
+         )
+ 
+ 
++@dataclasses.dataclass(frozen=True)
++class LeRobotRedBlueDataConfig(DataConfigFactory):
++    """Sequential red-then-blue pick-and-place, generated in Isaac Sim.
++
++    Shape matches LIBERO (8-D state, base + wrist camera), so the repack and the
++    overall structure follow LeRobotLiberoDataConfig. The one substantive
++    departure is the delta transform below, and it is not optional.
++    """
++
++    # For the ABSOLUTE-target datasets (*_abs) only: train on joint targets
++    # relative to the current state, converted back at inference, over the 7 arm
++    # joints; the gripper (index 7) stays absolute. This is openpi's own recipe
++    # for absolute Franka joint positions (RLDSDroidDataConfig, JOINT_POSITION;
++    # pi05_full_droid_finetune). NEVER set it for the velocity datasets: those
++    # are already relative to the state, see create().
++    extra_delta_transform: bool = False
++
++    @override
++    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
++        # Key names here are the ones convert_to_lerobot.py writes, mapped onto
++        # the keys the sim's policy client sends at inference.
++        repack_transform = _transforms.Group(
++            inputs=[
++                _transforms.RepackTransform(
++                    {
++                        "observation/image": "image",
++                        "observation/wrist_image": "wrist_image",
++                        "observation/state": "state",
++                        "actions": "actions",
++                        "prompt": "prompt",
++                    }
++                )
++            ]
++        )
++
++        data_transforms = _transforms.Group(
++            inputs=[red_blue_policy.RedBlueInputs(model_type=model_config.model_type)],
++            outputs=[red_blue_policy.RedBlueOutputs()],
++        )
++
++        # NO DELTA TRANSFORM. generate_demos.py:301 records
++        #     act_arm = (q_cmd_arm - q_meas[arm_idx]) / dt
++        # so `actions` are already joint VELOCITIES -- a difference from the
++        # measured state, scaled by 1/dt -- not absolute joint targets. Applying
++        # _transforms.DeltaActions here subtracts the state a SECOND time.
++        #
++        # That mistake is invisible in any shape check and does not raise: it
++        # shows up only in the statistics, where the action mean comes out as
++        # almost exactly -1 x the state mean (mean |action| 1.05 instead of
++        # 0.05), because subtracting state from something already centred on
++        # zero just yields -state. Caught by reading norm_stats.json before the
++        # first training run.
++        #
++        # This matches LIBERO after all, whose actions are likewise already
++        # deltas and whose config therefore sets extra_delta_transform=False.
++        # The flag below is for ABSOLUTE targets, where the state has not been
++        # subtracted yet -- see the field comment.
++        if self.extra_delta_transform:
++            delta_action_mask = _transforms.make_bool_mask(7, -1)
++            data_transforms = data_transforms.push(
++                inputs=[_transforms.DeltaActions(delta_action_mask)],
++                outputs=[_transforms.AbsoluteActions(delta_action_mask)],
++            )
++
++        model_transforms = ModelTransformFactory()(model_config)
++
++        return dataclasses.replace(
++            self.create_base_config(assets_dirs, model_config),
++            repack_transforms=repack_transform,
++            data_transforms=data_transforms,
++            model_transforms=model_transforms,
++        )
++
++
+ @dataclasses.dataclass(frozen=True)
+ class RLDSDroidDataConfig(DataConfigFactory):
+     """
+@@ -504,6 +579,10 @@ class TrainConfig:
+     seed: int = 42
+     # Global batch size.
+     batch_size: int = 32
++    # Gradient accumulation: each step splits the batch into this many micro-batches, runs them one
++    # after another and applies ONE optimizer update with the mean gradient. The effective batch,
++    # step count and LR schedule are unchanged; only one micro-batch's activations are in memory.
++    grad_accum_steps: int = 1
+     # Number of workers to use for the data loader. Increasing this number will speed up data loading but
+     # will increase memory and CPU usage.
+     num_workers: int = 2
+@@ -554,9 +633,66 @@ class TrainConfig:
+     def __post_init__(self) -> None:
+         if self.resume and self.overwrite:
+             raise ValueError("Cannot resume and overwrite at the same time.")
++        if self.grad_accum_steps < 1 or self.batch_size % self.grad_accum_steps:
++            raise ValueError(
++                f"grad_accum_steps ({self.grad_accum_steps}) must be >= 1 and divide batch_size ({self.batch_size})."
++            )
+ 
+ 
+ # Use `get_config` if you need to get a config by name in your code.
++def _red_blue_abs_ablation(name: str, repo_id: str, *, state: bool = True, delta: bool = True) -> TrainConfig:
++    """One arm of the subgoal-vs-monolith ablation (2026-09-21).
++
++    Both arms train on ABSOLUTE joint targets with the two fixes the
++    conditioning diagnostics called for, and differ ONLY in the dataset's
++    prompts: per-frame subgoals (red_blue_blocks_abs_subgoal_train, written by
++    scripts/relabel_subgoals.py) or the static full instruction
++    (red_blue_blocks_abs_train). One function builds both, so they cannot drift.
++
++      discrete_state_input=True   pi05 reads the joint state ONLY as prompt
++          tokens. The earlier red_blue configs copied pi05_libero's False, so the
++          model never saw its own joints: at red_blue_abs step 4000 its first
++          target missed the arm by 0.014 rad median, 0.31 rad max -- a step
++          command at every chunk boundary.
++      extra_delta_transform=True  targets relative to the current state
++          (openpi's recipe for absolute Franka joint positions).
++
++    Everything else is pi05_red_blue_lora_abs, whose run trained healthily (loss
++    0.109 -> 0.011 by step 4000, conditioning intact), unlike the velocity run,
++    which lost all conditioning between steps 20 and 30. Norm stats are identical
++    for both arms (prompts are not part of them): compute once, copy.
++
++    `state`/`delta` switch the two fixes off one at a time. Both arms of the
++    ablation collapsed at step 20-30 exactly like the velocity run, while
++    pi05_red_blue_lora_abs (neither fix) did not, so the *_stateonly and
++    *_deltaonly configs isolate which of the two triggers it.
++    """
++    lora = {"paligemma_variant": "gemma_2b_lora", "action_expert_variant": "gemma_300m_lora"}
++    return TrainConfig(
++        name=name,
++        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=state, **lora),
++        data=LeRobotRedBlueDataConfig(
++            repo_id=repo_id,
++            base_config=DataConfig(prompt_from_task=True),
++            extra_delta_transform=delta,
++        ),
++        batch_size=16,
++        num_workers=0,  # spawn + cv2 kills data-loader workers in this container (no libGL)
++        lr_schedule=_optimizer.CosineDecaySchedule(
++            warmup_steps=1_000,
++            peak_lr=2.5e-5,
++            decay_steps=30_000,
++            decay_lr=2.5e-6,
++        ),
++        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
++        freeze_filter=pi0_config.Pi0Config(pi05=True, **lora).get_freeze_filter(),
++        ema_decay=None,
++        fsdp_devices=4,
++        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
++        num_train_steps=30_000,
++    )
++
++
+ _CONFIGS = [
+     #
+     # Inference Aloha configs.
+@@ -761,6 +897,36 @@ _CONFIGS = [
+         pytorch_weight_path="/path/to/your/pytorch_weight_path",
+         num_train_steps=30_000,
+     ),
++    # v2 data (2026-09-25): physical grasp with fer_drive2s.usd, camera preset v2, close command 0.60. Same model
++    # settings as the v1 ablation pair (absolute targets, no state tokens, no DeltaActions); new names so the asset
++    # dirs get their own norm stats.
++    _red_blue_abs_ablation("pi05_red_blue_v2_subgoal", "hartmann/red_blue_v2_abs_subgoal_train", state=False, delta=False),
++    _red_blue_abs_ablation("pi05_red_blue_v2_monolith", "hartmann/red_blue_v2_abs_train", state=False, delta=False),
++    # v2 history arm (2026-09-27): monolith instruction + " History: <events so far>" per frame (scripts/relabel_history.py),
++    # the UniMem-style textual event memory inside the VLA prompt; same images/state/actions as the monolith data.
++    _red_blue_abs_ablation("pi05_red_blue_v2_history", "hartmann/red_blue_v2_abs_history_train", state=False, delta=False),
++    # RECAP-lite (2026-09-28): continue the SELECTED subgoal checkpoint (20000) on the agent's own successful closed-loop
++    # rollouts (seeds 2001-2200, oracle prompts) mixed with 40 original demos; same LoRA config and norm stats as the
++    # parent so the loaded weights stay consistent; short schedule with a lower peak LR.
++    dataclasses.replace(
++        _red_blue_abs_ablation("pi05_red_blue_v2_subgoal_recap", "hartmann/red_blue_v2_recap_subgoal_train", state=False, delta=False),
++        weight_loader=weight_loaders.CheckpointWeightLoader(
++            "/data/mhartmann/vla-runs/checkpoints/pi05_red_blue_v2_subgoal/v2_1gpu/20000/params"),
++        num_train_steps=5_000,
++        lr_schedule=_optimizer.CosineDecaySchedule(warmup_steps=200, peak_lr=1.0e-5, decay_steps=5_000, decay_lr=1.0e-6),
++    ),
++    # Full RECAP round 1 (2026-10-04): the RECAP-lite config above on the round-1 data -- the 200 rollouts of 20000 INCLUDING
++    # the failures, 200 rollouts with scripted-expert hand-over, 100 nudged rollouts with hand-over, and the same 40 demos --
++    # whose prompts carry the advantage indicator ("<sub-goal>. Advantage: good|bad" from the value function; expert and
++    # demo frames good; 25 % of the chunks keep the plain sub-goal). Same LoRA, norm stats, parent weights (20000) and
++    # schedule (5000 steps, cosine 1e-5 -> 1e-6, 200 warm-up) as RECAP-lite, so the comparison isolates what RECAP adds.
++    dataclasses.replace(
++        _red_blue_abs_ablation("pi05_red_blue_v2_subgoal_recapfull", "hartmann/red_blue_v2_recapfull_r1_train", state=False, delta=False),
++        weight_loader=weight_loaders.CheckpointWeightLoader(
++            "/data/mhartmann/vla-runs/checkpoints/pi05_red_blue_v2_subgoal/v2_1gpu/20000/params"),
++        num_train_steps=5_000,
++        lr_schedule=_optimizer.CosineDecaySchedule(warmup_steps=200, peak_lr=1.0e-5, decay_steps=5_000, decay_lr=1.0e-6),
++    ),
+     #
+     # Fine-tuning Aloha configs.
+     #
+diff --git a/src/openpi/transforms.py b/src/openpi/transforms.py
+index 272375e..70adc16 100644
+--- a/src/openpi/transforms.py
++++ b/src/openpi/transforms.py
+@@ -191,6 +191,38 @@ class ResizeImages(DataTransformFn):
+         return data
+ 
+ 
++@dataclasses.dataclass(frozen=True)
++class CenterCropResizeImages(DataTransformFn):
++    """Inference-time counterpart of the image scale that training's augmentation produces.
++
++    Training (models/model.py preprocess_observation, train=True) crops every non-wrist image to 95% at a random
++    offset and resizes it back, so the model only ever sees images zoomed ~5%. Inference (train=False) does not, so
++    without this transform the policy sees an image scale it was never trained on. This applies the deterministic
++    mean of that crop: a centre crop to `fraction`, resized back (bilinear) to the original size. Place it after
++    ResizeImages. Measured on red_blue (2026-09-23): halves the held-out loss and cuts joint-target error ~35%.
++    """
++
++    fraction: float = 0.95
++    keys: tuple[str, ...] = ("base_0_rgb",)
++
++    def __call__(self, data: DataDict) -> DataDict:
++        import jax.image
++
++        images = dict(data["image"])
++        for key in self.keys:
++            if key not in images:
++                continue
++            im = np.asarray(images[key])
++            h, w = im.shape[-3:-1]
++            ch, cw = int(h * self.fraction), int(w * self.fraction)
++            y0, x0 = (h - ch) // 2, (w - cw) // 2
++            crop = im[..., y0 : y0 + ch, x0 : x0 + cw, :].astype(np.float32)
++            out = np.asarray(jax.image.resize(crop, (*crop.shape[:-3], h, w, crop.shape[-1]), "bilinear"))
++            images[key] = np.clip(np.round(out), 0, 255).astype(np.uint8) if im.dtype == np.uint8 else out.astype(im.dtype)
++        data["image"] = images
++        return data
++
++
+ @dataclasses.dataclass(frozen=True)
+ class SubsampleActions(DataTransformFn):
+     stride: int
+diff --git a/src/openpi/policies/red_blue_policy.py b/src/openpi/policies/red_blue_policy.py
+new file mode 100644
+index 0000000..b69670f
+--- /dev/null
++++ b/src/openpi/policies/red_blue_policy.py
+@@ -0,0 +1,102 @@
++"""Policy transforms for the red/blue sequential pick-and-place task.
++
++Modelled on ``libero_policy``, which our dataset matches in shape (8-D state,
++two camera views) but NOT in semantics. Two differences are load-bearing:
++
++  * STATE/ACTION ARE JOINT SPACE, NOT EEF. ``state`` is the 7 *measured* Franka
++    arm joint positions plus one normalised gripper-closedness scalar.
++    ``actions`` is 7 joint VELOCITIES -- generate_demos.py:301 records
++    ``(q_cmd - q_meas) / dt`` -- plus one absolute gripper command. LIBERO's
++    8-D state is end-effector pose instead, but nothing here depends on which:
++    the vector is passed through untouched.
++
++    Because the actions are already relative to the measured state, the data
++    config applies NO delta transform. Adding one subtracts the state twice and
++    silently corrupts the action distribution.
++
++  * ACTION DIMENSION IS 8, NOT 7. ``LiberoOutputs`` hardcodes
++    ``actions[..., :7]`` because LIBERO has 6 EEF deltas + 1 gripper. Reusing it
++    for this dataset would slice off the gripper command, and a pick-and-place
++    policy whose gripper never actuates fails in a way that looks like a
++    grasping bug rather than a plumbing bug. Hence a separate Outputs class.
++"""
++
++import dataclasses
++
++import einops
++import numpy as np
++
++from openpi import transforms
++from openpi.models import model as _model
++
++# 7 arm joints + 1 gripper. Kept as a named constant because it appears both
++# here and in the delta-action mask in training/config.py; the two must agree.
++ACTION_DIM = 8
++
++
++def make_red_blue_example() -> dict:
++    """Creates a random input example for the red/blue policy."""
++    return {
++        "observation/state": np.random.rand(ACTION_DIM),
++        "observation/image": np.random.randint(256, size=(224, 224, 3), dtype=np.uint8),
++        "observation/wrist_image": np.random.randint(256, size=(224, 224, 3), dtype=np.uint8),
++        "prompt": "pick up the red block with your arm, place it back, and then grasp the blue block",
++    }
++
++
++def _parse_image(image) -> np.ndarray:
++    image = np.asarray(image)
++    if np.issubdtype(image.dtype, np.floating):
++        image = (255 * image).astype(np.uint8)
++    if image.shape[0] == 3:
++        image = einops.rearrange(image, "c h w -> h w c")
++    return image
++
++
++@dataclasses.dataclass(frozen=True)
++class RedBlueInputs(transforms.DataTransformFn):
++    """Dataset/inference inputs -> model inputs. Used for both training and inference."""
++
++    model_type: _model.ModelType
++
++    def __call__(self, data: dict) -> dict:
++        # LeRobot hands back float32 (C,H,W); the sim hands back uint8 (H,W,C).
++        # _parse_image normalises both so training and inference agree.
++        base_image = _parse_image(data["observation/image"])
++        wrist_image = _parse_image(data["observation/wrist_image"])
++
++        inputs = {
++            "state": data["observation/state"],
++            "image": {
++                "base_0_rgb": base_image,
++                "left_wrist_0_rgb": wrist_image,
++                # Single-arm setup: there is no right wrist camera, so pad with
++                # zeros and mask it out below.
++                "right_wrist_0_rgb": np.zeros_like(base_image),
++            },
++            "image_mask": {
++                "base_0_rgb": np.True_,
++                "left_wrist_0_rgb": np.True_,
++                "right_wrist_0_rgb": np.True_ if self.model_type == _model.ModelType.PI0_FAST else np.False_,
++            },
++        }
++
++        # Actions are only present during training.
++        if "actions" in data:
++            inputs["actions"] = data["actions"]
++
++        if "prompt" in data:
++            inputs["prompt"] = data["prompt"]
++
++        return inputs
++
++
++@dataclasses.dataclass(frozen=True)
++class RedBlueOutputs(transforms.DataTransformFn):
++    """Model outputs -> dataset format. Inference only."""
++
++    def __call__(self, data: dict) -> dict:
++        # Actions were padded up to the model action dimension on the way in;
++        # take back exactly our 8 (7 joints + gripper). See module docstring for
++        # why this is 8 and not LIBERO's 7.
++        return {"actions": np.asarray(data["actions"][..., :ACTION_DIM])}

@@ -16,8 +16,6 @@ training set, our additions to openpi, and the launcher that ran the fine-tuning
 | `openpi/config_red_blue_additions.py` | the lines we added to openpi's `src/openpi/training/config.py`: the data config (`LeRobotRedBlueDataConfig`), the config factory `_red_blue_abs_ablation` and the four configs `pi05_red_blue_v2_{subgoal,monolith,history,subgoal_recap}`; an extract for reading, not a module |
 | `openpi/openpi_changes.patch` | the complete diff of our changes to openpi (commit 215abfb, Apache 2.0): the config additions, the policy transforms, a weight guard in `train.py` that aborts on non-finite or exploding parameters (exit code 3), optional gradient accumulation, a switch for buffer donation, and the inference-time centre crop (`transforms.py`, `serve_policy.py --policy.center_crop`) |
 
-The demonstration generator (`generate_demos.py`, Isaac Sim) and the host paths in the launcher (`/data/mhartmann/...`, the
-Singularity image) belong to the research code.
 
 ## LoRA settings
 

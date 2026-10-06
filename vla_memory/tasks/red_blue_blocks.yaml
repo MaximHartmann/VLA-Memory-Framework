@@ -36,14 +36,27 @@ system_ext: >-
   only if it is between the gripper fingers and moves with the hand; a lifted cube is clearly above the table
   surface, with visible space between the cube and the table.
 system_both: >-
-  You receive two images. Picture 1 is a fixed external camera that sees the table, both cubes and the arm: use it
-  to judge where the cubes are and whether one is lifted; note that the hand often hides a held cube from this
-  camera. Picture 2 is the wrist camera, which looks straight down past the fingers; the fingers themselves are
-  outside its view. HOW TO READ PICTURE 2: (a) a cube HELD between the fingers appears as a tall coloured band cut
-  off at the LEFT EDGE of Picture 2, filling the left border from top to bottom; (b) a cube lying ON THE TABLE below
-  the gripper appears as a complete square with all four edges visible, somewhere in the middle of Picture 2 (large
-  when the gripper is low, smaller when it has moved up); (c) an empty gripper over the table shows only the table
-  surface, possibly with a small cube far away. A complete square in Picture 2 is NEVER a held cube.
+  You receive two images. Picture 1 is a fixed external camera that sees the table, both cubes and the arm from the
+  side: use it to judge where the cubes are and whether a cube is lifted (a lifted cube hangs under the hand with
+  visible space between it and the table); the hand can partly hide a held cube from this camera. Picture 2 is the
+  wrist camera on the hand, looking forward and down between the fingers. HOW TO READ PICTURE 2: the lower 45% of
+  Picture 2 is always covered by the gripper's own light-grey housing, a flat band across the full width, and the two
+  finger pads are always visible as small dark-grey blocks on the top edge of that band, one at the left and one at
+  the right. (a) A cube HELD between the fingers is an upright, complete coloured square in the CENTRE of Picture 2,
+  about two fifths of the picture wide, its lower edge resting on the housing band, with both finger pads touching its
+  left and right sides. A held cube looks the same at every height because it moves with the camera: Picture 2 cannot
+  show whether it has been lifted; take the height from the proprioception (hand height) and from Picture 1. (b) A
+  cube resting on the table right below a LOW, OPEN gripper (just before a grasp, or just after a release while the
+  hand is still down) also fills the centre of Picture 2 and can look like (a). The differences: the open finger pads
+  stand apart from the cube, with table visible between each pad and the side of the cube (after a release the cube
+  is often also tilted or shifted); the proprioception reports the gripper open (closedness below 0.30); Picture 1
+  shows the cube resting on the table. (c) If the gripper is closed but no upright square sits between the pads (the
+  cube lies tilted across a pad, is pushed to one side, or shows only as a thin strip, or not at all, at the top edge
+  of the housing), the grasp missed and the cube is NOT held, although the gripper reads closed: the closedness is
+  about the same whether the fingers closed on the cube or beside it. (d) A cube on the table seen from higher up is a
+  smaller square, often tilted, in the upper part of Picture 2 above the finger pads; it shrinks and moves up as the
+  hand rises, for example while the hand moves away after placing it. (e) An empty gripper high above the table shows
+  the table surface, possibly with one or two small cubes far away.
 plan_system: >-
   You decompose a natural-language instruction for a single robot arm into an ordered list of skills. The arm knows
   exactly these skills and nothing else: {skills}. 'pick up the X block' grasps the X cube and lifts it; 'place the X
@@ -57,6 +70,12 @@ proprio:
   closed_threshold: 0.30
   history: 12
   note: "the hand is 11-13 cm above the table when it grasps or releases a cube resting on the table"
+  # What the gripper signals mean, for the rules writer of the history-appended prompt (robot, not task):
+  open_width: 0.06          # m, both fingers together; wider = open (fully open 0.08, closed on a cube 0.037)
+  empty_width: 0.015        # m, narrower = closed on nothing
+  squeeze_force: 8.0        # finger force (N) above which the fingers hold something; about 27 on a cube in the simulator.
+                            # A closed empty gripper stops at its commanded width (0.032 here) without force, so the force,
+                            # not the width, rejects empty grasps. For a gripper that reports a grasped flag (1/0): 0.5.
 
 # Retrieval key of the exemplar store: colour thumbnail + blob statistics of each object colour, per camera.
 # A colour rule is a list of [channel_a, channel_b, min_difference] conditions on the RGB values (all must hold).
@@ -88,6 +107,21 @@ history:
   events: {"pick up": "picked up the {object} block", "place": "placed the {object} block"}
   joiner: ", "
   suffix: "."
+  max_lines: 3              # the longest history in the training data (the last state lists three events)
+  # Rules writer (history_appended.rules): when a line is written, from the robot's own signals. Each verb maps to one
+  # trigger of the grasp cycle. The numbers reproduce the moments where the training labels change, the same rules as the
+  # simulator's ground-truth tracker: "pick up" once the block is 9 cm up, "place" once the fingertips are 6 cm above or
+  # 8 cm away from the set-down block. A block let go less than 8 cm above the grasp point counts as set down.
+  rules:
+    pick up: {trigger: lift, rise: 0.09}
+    place:   {trigger: set_down, release_below: 0.08, up: 0.06, away: 0.08}
+  # Which object a pick concerns (history_appended.identify): plan_order assumes the plan; colour counts each object's colour
+  # (fingerprint.colours) in the wrist-image region where a held object appears (rows, cols as fractions; measured on the
+  # demonstrations: a held block fills a median 82 % of it, the other block's colour never appears). On 957 recorded picks
+  # with a lifted block the colour identifier named every one correctly, including 31 blue-first picks the plan order gets wrong.
+  object_from: colour
+  held_region: [0.30, 0.60, 0.33, 0.67]
+  held_min_share: 0.12
 
 instruction_examples:
   - "Pick up the red block with your arm, place it back, and then grasp the blue block."

@@ -3,7 +3,9 @@
 A task is a set of objects, a set of verbs, a skill template that combines them into the exact prompt strings the
 VLA policy was trained on, a written completion rule per verb, the system texts for the planner model, and the
 JSON schemas that force the model's answers into the skill vocabulary. Nothing task-specific lives in the code:
-see vla_memory/tasks/red_blue_blocks.yaml for the reference task (two cubes, pick and place).
+see vla_memory/tasks/red_blue_blocks.yaml for the reference task (two cubes, pick and place) and
+vla_memory/tasks/drawers.yaml for a task without pick and place (open and close drawers; extra signals, signal triggers and
+its own monitor fields).
 """
 from __future__ import annotations
 
@@ -13,6 +15,9 @@ import pathlib
 from typing import Any
 
 _HERE = pathlib.Path(__file__).resolve().parent
+# The monitor's state fields besides the object states when a task file has no monitor_fields: the gripper of the reference task
+DEFAULT_MONITOR_FIELDS: dict[str, Any] = {"gripper": ["open", "closed", "unsure"], "gripper_high_above_table": "boolean"}
+_FIELD_TYPES = {"boolean": {"type": "boolean"}, "number": {"type": "number"}}
 
 
 def _load_file(path) -> dict:
@@ -41,12 +46,18 @@ class TaskSpec:
     object_field: str = "{object}_cube"     # JSON field name of an object's state in the monitor answer
     object_noun: str = "cube"               # how objects are called in generated text ("red cube = on_table")
     max_plan_len: int = 8                   # most skills in one plan (the plan schema's maxItems)
-    proprio: dict[str, Any] = dataclasses.field(default_factory=dict)      # closed_threshold, note
+    proprio: dict[str, Any] = dataclasses.field(default_factory=dict)      # closed_threshold, note; open_width, empty_width,
+                                                                           # squeeze_force (gripper signals of the rules writer)
     fingerprint: dict[str, Any] = dataclasses.field(default_factory=dict)  # colour rules for ColourBlobFingerprint
     demo_phases: dict[str, Any] = dataclasses.field(default_factory=dict)  # phase table for labels.PhaseLabeller
-    history: dict[str, Any] = dataclasses.field(default_factory=dict)      # history-appended prompt: prefix, none, events, joiner, suffix
+    history: dict[str, Any] = dataclasses.field(default_factory=dict)      # history-appended prompt: prefix, none, events, joiner, suffix,
+                                                                           # max_lines, rules (the rules writer's triggers per verb)
     instruction_examples: list[str] = dataclasses.field(default_factory=list)
     notes: str = ""
+    signals: Any = dataclasses.field(default_factory=dict)  # the robot's signals beyond memory/proprio_steps that the rules use, sent
+                                                            # as memory/signal_steps: names, or name -> description (unit, source)
+    monitor_fields: dict[str, Any] | None = None   # the monitor's state fields besides the objects: name -> list of strings (enum),
+                                                   # "boolean", "number" or a JSON schema; None = DEFAULT_MONITOR_FIELDS (gripper)
 
     # ------------------------------------------------------------------ construction
     @classmethod
@@ -58,6 +69,11 @@ class TaskSpec:
     @classmethod
     def default(cls) -> "TaskSpec":
         return cls.load(_HERE / "tasks" / "red_blue_blocks.yaml")
+
+    @classmethod
+    def packaged(cls, name: str) -> "TaskSpec":
+        """A task file shipped with the package (vla_memory/tasks/NAME.yaml): red_blue_blocks, drawers."""
+        return cls.load(_HERE / "tasks" / f"{name}.yaml")
 
     # ------------------------------------------------------------------ skills
     @property
@@ -84,7 +100,7 @@ class TaskSpec:
         return self.plan_system.format(skills="; ".join(f'"{s}"' for s in self.skills))
 
     def system_text(self, use_wrist: bool) -> str:
-        return self.system_head + (self.system_both if use_wrist else self.system_ext)
+        return self.system_head.rstrip() + " " + (self.system_both if use_wrist else self.system_ext).lstrip()
 
     def criterion(self, skill: str) -> str:
         verb, obj = self.parse_skill(skill)
@@ -96,10 +112,34 @@ class TaskSpec:
                                         "minItems": 1, "maxItems": self.max_plan_len}},
                 "required": ["plan"], "additionalProperties": False}
 
-    def monitor_schema(self, brief: bool = False) -> dict:
+    def state_fields(self) -> dict[str, Any]:
+        """The monitor's state fields besides the object states, in answer order: the task file's monitor_fields, or the
+        gripper fields of the reference task (DEFAULT_MONITOR_FIELDS) when it has none."""
+        return dict(DEFAULT_MONITOR_FIELDS if self.monitor_fields is None else self.monitor_fields)
+
+    def signal_names(self) -> tuple[str, ...]:
+        """The extra signals the task declares (`signals`), in order."""
+        return tuple(self.signals or ())
+
+    def monitor_schema(self, brief: bool = False, verdict_only: bool = False) -> dict:
+        """The monitor's answer: every object's state, the task's state fields (state_fields(): the gripper fields unless the
+        task file declares monitor_fields), a free-text reason (not with brief) and current_skill_done. verdict_only:
+        current_skill_done alone (the planner's default; the shortest answer)."""
+        if verdict_only:
+            return {"type": "object", "properties": {"current_skill_done": {"type": "boolean"}},
+                    "required": ["current_skill_done"], "additionalProperties": False}
         props = {self.field(o): {"type": "string", "enum": list(self.object_states)} for o in self.objects}
-        props.update({"gripper": {"type": "string", "enum": ["open", "closed", "unsure"]},
-                      "gripper_high_above_table": {"type": "boolean"}})
+        for name, kind in self.state_fields().items():
+            if name in props or name in ("reason", "current_skill_done"):
+                raise ValueError(f"monitor_fields: {name!r} is already a field of the answer")
+            if isinstance(kind, (list, tuple)):
+                props[name] = {"type": "string", "enum": [str(x) for x in kind]}
+            elif isinstance(kind, dict):
+                props[name] = dict(kind)
+            elif kind in _FIELD_TYPES:
+                props[name] = dict(_FIELD_TYPES[kind])
+            else:
+                raise ValueError(f"monitor_fields.{name}: a list of strings, 'boolean', 'number' or a JSON schema, got {kind!r}")
         if not brief:
             props["reason"] = {"type": "string", "maxLength": 160}
         props["current_skill_done"] = {"type": "boolean"}

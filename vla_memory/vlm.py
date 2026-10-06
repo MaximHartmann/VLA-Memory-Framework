@@ -5,17 +5,28 @@ A call sends chat messages (text and images) and may pass a JSON schema; the ser
 the answer token by token (STRUCTURED OUTPUT), so a caller can restrict the model to, for example, the skills the
 policy was trained on. The planner loop makes two kinds of calls this way: a text-only plan request once per
 episode and a monitor query with images at every policy call. Implement VLMBackend.chat for another serving stack.
+
+Choosing the backend (the proxies' --vlm-backend, plugins.py): a registered name (VLM_BACKENDS: openai =
+OpenAICompatibleVLM; register_vlm_backend adds one), an entry point of the group vla_memory.vlm_backends, or an import path
+module:Class. make_vlm() builds it; resolve_api_key() reads --vlm-api-key or the environment variable VLM_API_KEY.
 """
 from __future__ import annotations
 
 import base64
 import io
 import json
+import os
 import re
 import time
 from typing import Any
 
 import numpy as np
+
+from .plugins import construct, resolve
+
+VLM_BACKENDS: dict[str, Any] = {"openai": "vla_memory.vlm:OpenAICompatibleVLM"}   # name -> class or import path
+VLM_ENTRY_POINTS = "vla_memory.vlm_backends"
+API_KEY_ENV = "VLM_API_KEY"
 
 
 def encode_png(img: np.ndarray) -> str:
@@ -38,8 +49,9 @@ class VLMBackend:
 class OpenAICompatibleVLM(VLMBackend):
     """Minimal client for /v1/chat/completions with response_format=json_schema (vLLM's structured output).
 
-    chat_template_kwargs is passed through to the server; the default disables Qwen3's "thinking" mode, which is
-    what we ran. Pass None for servers that reject unknown fields.
+    chat_template_kwargs is passed through to the server; the default (None) disables Qwen3's "thinking" mode, which is
+    what we ran. Pass {} for servers that reject unknown fields: then no chat_template_kwargs are sent. api_key is sent as
+    "Authorization: Bearer <key>".
     """
 
     def __init__(self, base_url="http://127.0.0.1:8100/v1", model="Qwen3.8-27B-INT4", timeout=300, temperature=0.0,
@@ -78,3 +90,25 @@ class OpenAICompatibleVLM(VLMBackend):
                 m = re.search(r"\{.*\}", text, re.S)
                 out["json"] = json.loads(m.group(0)) if m else None
         return out
+
+
+# ---------------------------------------------------------------------------------------------------------------- choosing one
+def register_vlm_backend(name: str, factory) -> None:
+    """Make `factory` (a VLMBackend class, or a callable returning one) selectable as --vlm-backend NAME."""
+    VLM_BACKENDS[name] = factory
+
+
+def resolve_vlm_backend(spec):
+    """The class --vlm-backend names: a registered name, an entry point of vla_memory.vlm_backends, or module:Class."""
+    return resolve(spec, VLM_BACKENDS, VLM_ENTRY_POINTS, "VLM backend")
+
+
+def make_vlm(spec="openai", options: dict | None = None, **standard) -> VLMBackend:
+    """The backend `spec` names, built with the `standard` keyword arguments it declares (e.g. base_url, model, api_key,
+    chat_template_kwargs) and every one of `options` (--vlm-arg KEY=VALUE)."""
+    return construct(resolve_vlm_backend(spec), standard, options, f"VLM backend {spec!r}")
+
+
+def resolve_api_key(explicit: str | None = None) -> str | None:
+    """The API key of the VLM server: the explicit one (--vlm-api-key), else the environment variable VLM_API_KEY, else None."""
+    return explicit or os.environ.get(API_KEY_ENV) or None

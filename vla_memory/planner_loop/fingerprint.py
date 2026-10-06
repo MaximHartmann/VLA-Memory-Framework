@@ -27,12 +27,18 @@ def thumbnail(img, th=12, tw=16) -> np.ndarray:
     return (im[np.ix_(ys, xs)].astype(np.float32) / 255.0).ravel()
 
 
-def colour_blob(img, rules) -> np.ndarray:
-    """Area (log-scaled), centroid, extent and edge contact of the pixels satisfying all channel-difference rules."""
+def colour_mask(img, rules) -> np.ndarray:
+    """Pixels satisfying all channel-difference rules [channel_a, channel_b, min_difference] of one colour."""
     im = np.asarray(img)[..., :3].astype(np.int16)
     m = np.ones(im.shape[:2], dtype=bool)
     for a, b, d in rules:
         m &= (im[..., _CH[a]] - im[..., _CH[b]]) > d
+    return m
+
+
+def colour_blob(img, rules) -> np.ndarray:
+    """Area (log-scaled), centroid, extent and edge contact of the pixels satisfying all channel-difference rules."""
+    m = colour_mask(img, rules)
     h, w = m.shape; n = int(m.sum())
     if n < 4:
         return np.zeros(7, np.float32)

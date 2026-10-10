@@ -21,8 +21,10 @@ _FIELD_TYPES = {"boolean": {"type": "boolean"}, "number": {"type": "number"}}
 
 
 def _load_file(path) -> dict:
-    p = pathlib.Path(path); text = p.read_text()
-    if p.suffix.lower() in (".yaml", ".yml"):
+    """The task file as a dict: YAML (needs pyyaml) or JSON, by file suffix."""
+    path = pathlib.Path(path)
+    text = path.read_text()
+    if path.suffix.lower() in (".yaml", ".yml"):
         try:
             import yaml
         except ImportError as e:  # pragma: no cover
@@ -128,19 +130,28 @@ class TaskSpec:
         if verdict_only:
             return {"type": "object", "properties": {"current_skill_done": {"type": "boolean"}},
                     "required": ["current_skill_done"], "additionalProperties": False}
-        props = {self.field(o): {"type": "string", "enum": list(self.object_states)} for o in self.objects}
+        props = self._object_state_properties()
         for name, kind in self.state_fields().items():
             if name in props or name in ("reason", "current_skill_done"):
                 raise ValueError(f"monitor_fields: {name!r} is already a field of the answer")
-            if isinstance(kind, (list, tuple)):
-                props[name] = {"type": "string", "enum": [str(x) for x in kind]}
-            elif isinstance(kind, dict):
-                props[name] = dict(kind)
-            elif kind in _FIELD_TYPES:
-                props[name] = dict(_FIELD_TYPES[kind])
-            else:
-                raise ValueError(f"monitor_fields.{name}: a list of strings, 'boolean', 'number' or a JSON schema, got {kind!r}")
+            props[name] = _field_schema(name, kind)
         if not brief:
             props["reason"] = {"type": "string", "maxLength": 160}
         props["current_skill_done"] = {"type": "boolean"}
         return {"type": "object", "properties": props, "required": list(props), "additionalProperties": False}
+
+    def _object_state_properties(self) -> dict:
+        """One string field per object (field()), its enum the task's object states, in the objects' order."""
+        return {self.field(o): {"type": "string", "enum": list(self.object_states)} for o in self.objects}
+
+
+def _field_schema(name: str, kind) -> dict:
+    """The JSON schema of one state field of the monitor's answer: `kind` is a list of strings (an enum), "boolean",
+    "number", or a JSON schema taken as it is."""
+    if isinstance(kind, (list, tuple)):
+        return {"type": "string", "enum": [str(x) for x in kind]}
+    if isinstance(kind, dict):
+        return dict(kind)
+    if kind in _FIELD_TYPES:
+        return dict(_FIELD_TYPES[kind])
+    raise ValueError(f"monitor_fields.{name}: a list of strings, 'boolean', 'number' or a JSON schema, got {kind!r}")

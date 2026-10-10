@@ -13,8 +13,11 @@ import numpy as np
 
 
 class MemoryStore:
+    """The four methods every long-term memory store implements (module docstring)."""
+
     def __len__(self) -> int:
-        raise NotImplementedError #is there anything stored?
+        """How many entries the store holds (0: nothing stored yet)."""
+        raise NotImplementedError
 
     def retrieve(self, images: Sequence[np.ndarray], k: int = 4, exclude_episode: Any = None) -> list[tuple[int, float]]:
         """Return [(entry index, similarity)] of the k entries most similar to the current images."""

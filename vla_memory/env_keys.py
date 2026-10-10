@@ -49,11 +49,35 @@ def task_signals(task) -> tuple[str, ...]:
 
 
 def _num(x) -> float | None:
+    """The value as a float; None when it was not given."""
     return None if x is None else float(x)
 
 
 def _nan(x) -> float:
+    """The value as a float; NaN when it was not given (the per-step arrays)."""
     return math.nan if x is None else float(x)
+
+
+def _measured_now(finger_width, finger_effort, tip_xyz, tip_z) -> dict:
+    """The robot's signals of one step as floats (None: not given); tip_z is tip_xyz's z when the fingertip position is known."""
+    tip = None
+    if tip_xyz is not None:
+        tip = np.asarray(tip_xyz, float).reshape(3)
+    if tip is not None:
+        height = float(tip[2])
+    else:
+        height = _num(tip_z)
+    return {"finger_width": _num(finger_width), "finger_effort": _num(finger_effort), "tip_xyz": tip, "tip_z": height}
+
+
+def _proprio_row(now: dict) -> list[float]:
+    """One row of memory/proprio_steps, in PROPRIO_COLUMNS order; a value not given is NaN."""
+    tip = now["tip_xyz"]
+    if tip is not None:
+        xyz = [float(x) for x in tip]
+    else:
+        xyz = [math.nan, math.nan, _nan(now["tip_z"])]
+    return [_nan(now["finger_width"]), _nan(now["finger_effort"]), *xyz]
 
 
 class ControlKeys:
@@ -73,53 +97,111 @@ class ControlKeys:
 
     def start_episode(self, episode_id: Any = None):
         """A new episode: the next call() carries memory/new_episode True and the steps recorded from now on."""
-        self.episode_id = episode_id; self._first = True; self._grasp = False
-        self._rows: list = []; self._sig: list = []; self._now: dict | None = None
+        self.episode_id = episode_id
+        self._first = True
+        self._has_proprio = False   # whether any gripper or fingertip value was recorded in this episode
+        self._reset_buffer()
+
+    def _reset_buffer(self):
+        """Forget the recorded steps: the next call() sends only the steps recorded from now on."""
+        self._rows: list = []
+        self._signal_rows: list = []
+        self._now: dict | None = None
 
     def record(self, finger_width=None, finger_effort=None, tip_xyz=None, tip_z=None, signals: dict | None = None):
         """The robot's signals at one control step, observed before the step's action. Call it at EVERY control step, also at
         the steps with a policy call (before call()): every step must reach the rules writer exactly once. finger_width (m,
         both fingers), finger_effort (N, or a 1/0 grasped flag), tip_xyz (m, the fingertip midpoint) or only tip_z; signals:
         the task's declared signals by name (a missing one is NaN)."""
-        tip = None if tip_xyz is None else np.asarray(tip_xyz, float).reshape(3)
-        now = {"finger_width": _num(finger_width), "finger_effort": _num(finger_effort), "tip_xyz": tip,
-               "tip_z": float(tip[2]) if tip is not None else _num(tip_z)}
-        self._grasp = self._grasp or any(v is not None for v in now.values())
-        xyz = [float(x) for x in tip] if tip is not None else [math.nan, math.nan, _nan(now["tip_z"])]
-        self._rows.append([_nan(now["finger_width"]), _nan(now["finger_effort"]), *xyz])
-        sig = dict(signals or {})
-        unknown = [k for k in sig if k not in self.signal_names]
+        now = _measured_now(finger_width, finger_effort, tip_xyz, tip_z)
+        self._has_proprio = self._has_proprio or any(v is not None for v in now.values())
+        self._rows.append(_proprio_row(now))
+        self._signal_rows.append(self._signal_row(signals))
+        self._now = now
+
+    def _signal_row(self, signals: dict | None) -> list[float]:
+        """One row of the task's declared signals, in signal_names order; a signal not given is NaN."""
+        given = dict(signals or {})
+        unknown = [k for k in given if k not in self.signal_names]
         if unknown:
             raise ValueError(f"unknown signal(s) {unknown}; declared: {list(self.signal_names)} (task file: signals)")
-        self._sig.append([_nan(sig.get(n)) for n in self.signal_names])
-        self._now = now
+        return [_nan(given.get(name)) for name in self.signal_names]
 
     def call(self, step: int, *, exterior_raw=None, wrist_raw=None, gripper_closedness=None, hand_height=None,
              oracle_prompt=None) -> dict:
         """The memory/ keys of the policy call at `step` (module docstring); the next call's buffer starts empty."""
-        inc, now, v = self.include, self._now or {}, {}
-        if "new_episode" in inc: v["new_episode"] = self._first
-        if "episode" in inc and self.episode_id is not None: v["episode"] = self.episode_id
-        if "step" in inc: v["step"] = int(step)
-        if "oracle_prompt" in inc and oracle_prompt is not None: v["oracle_prompt"] = oracle_prompt
-        if "exterior_raw" in inc and exterior_raw is not None: v["exterior_raw"] = np.ascontiguousarray(exterior_raw)
-        if "wrist_raw" in inc and wrist_raw is not None: v["wrist_raw"] = np.ascontiguousarray(wrist_raw)
-        if "gripper_closedness" in inc and gripper_closedness is not None: v["gripper_closedness"] = float(gripper_closedness)
-        if "hand_height" in inc and hand_height is not None: v["hand_height"] = float(hand_height)
-        for k in ("finger_width", "finger_effort", "tip_z"):
-            if k in inc and now.get(k) is not None:
-                v[k] = now[k]
-        if "tip_xyz" in inc and now.get("tip_xyz") is not None: v["tip_xyz"] = now["tip_xyz"].astype(np.float32)
-        if "proprio_steps" in inc and self._grasp:   # the first call at the first step: the single keys carry the row
-            v["proprio_steps"] = np.asarray([] if self._first and len(self._rows) <= 1 else self._rows, np.float32).reshape(-1, 5)
-        if "signal_steps" in inc and self.signal_names:
-            a = np.asarray(self._sig, np.float32).reshape(-1, len(self.signal_names))
-            v["signal_steps"] = {n: np.ascontiguousarray(a[:, j]) for j, n in enumerate(self.signal_names)}
-        self._first = False; self._rows = []; self._sig = []; self._now = None
-        return {CONTROL_PREFIX + k: x for k, x in v.items()}
+        values = {}
+        values.update(self._episode_keys(step))
+        values.update(self._given_keys(oracle_prompt, exterior_raw, wrist_raw, gripper_closedness, hand_height))
+        values.update(self._current_step_keys())
+        values.update(self._step_array_keys())
+        self._first = False
+        self._reset_buffer()
+        return {CONTROL_PREFIX + k: x for k, x in values.items()}
+
+    def _episode_keys(self, step: int) -> dict:
+        """new_episode (True at the first call of an episode), episode (when an id was given) and step."""
+        keys = {}
+        if "new_episode" in self.include:
+            keys["new_episode"] = self._first
+        if "episode" in self.include and self.episode_id is not None:
+            keys["episode"] = self.episode_id
+        if "step" in self.include:
+            keys["step"] = int(step)
+        return keys
+
+    def _given_keys(self, oracle_prompt, exterior_raw, wrist_raw, gripper_closedness, hand_height) -> dict:
+        """The values passed to call(), as given: a value None is left out, the frames are made contiguous."""
+        keys = {}
+        if "oracle_prompt" in self.include and oracle_prompt is not None:
+            keys["oracle_prompt"] = oracle_prompt
+        if "exterior_raw" in self.include and exterior_raw is not None:
+            keys["exterior_raw"] = np.ascontiguousarray(exterior_raw)
+        if "wrist_raw" in self.include and wrist_raw is not None:
+            keys["wrist_raw"] = np.ascontiguousarray(wrist_raw)
+        if "gripper_closedness" in self.include and gripper_closedness is not None:
+            keys["gripper_closedness"] = float(gripper_closedness)
+        if "hand_height" in self.include and hand_height is not None:
+            keys["hand_height"] = float(hand_height)
+        return keys
+
+    def _current_step_keys(self) -> dict:
+        """finger_width, finger_effort, tip_z and tip_xyz of this step: the values of the last record() since the previous call."""
+        now = self._now or {}
+        keys = {}
+        for name in ("finger_width", "finger_effort", "tip_z"):
+            if name in self.include and now.get(name) is not None:
+                keys[name] = now[name]
+        if "tip_xyz" in self.include and now.get("tip_xyz") is not None:
+            keys["tip_xyz"] = now["tip_xyz"].astype(np.float32)
+        return keys
+
+    def _step_array_keys(self) -> dict:
+        """proprio_steps (when the robot has gripper or fingertip signals at all) and signal_steps (when the task declares
+        signals), over every step recorded since the previous call."""
+        keys = {}
+        if "proprio_steps" in self.include and self._has_proprio:
+            keys["proprio_steps"] = self._proprio_steps()
+        if "signal_steps" in self.include and self.signal_names:
+            keys["signal_steps"] = self._signal_steps()
+        return keys
+
+    def _proprio_steps(self) -> np.ndarray:
+        """The recorded rows as float32 (n, 5), oldest first. The first call of an episode made at its first recorded step
+        sends an empty array: the four single keys carry that row."""
+        rows = self._rows
+        if self._first and len(rows) <= 1:
+            rows = []
+        return np.asarray(rows, np.float32).reshape(-1, 5)
+
+    def _signal_steps(self) -> dict[str, np.ndarray]:
+        """The declared signals over the recorded steps: one float32 (n,) array per signal name."""
+        table = np.asarray(self._signal_rows, np.float32).reshape(-1, len(self.signal_names))
+        return {name: np.ascontiguousarray(table[:, column]) for column, name in enumerate(self.signal_names)}
 
     def observation(self, policy_keys: dict, instruction: str, step: int, **call_kw) -> dict:
         """The whole observation of a policy call: the policy's own keys, the FULL instruction as `prompt`, and call()."""
-        obs = dict(policy_keys); obs["prompt"] = instruction
+        obs = dict(policy_keys)
+        obs["prompt"] = instruction
         obs.update(self.call(step, **call_kw))
         return obs

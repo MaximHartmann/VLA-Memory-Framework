@@ -58,8 +58,11 @@ class OpenAICompatibleVLM(VLMBackend):
                  max_tokens=512, chat_template_kwargs: dict | None = None, api_key: str | None = None,
                  extra_body: dict | None = None):
         import requests
-        self.base_url = base_url.rstrip("/"); self.model = model; self.timeout = timeout
-        self.temperature = temperature; self.max_tokens = max_tokens
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.timeout = timeout
+        self.temperature = temperature
+        self.max_tokens = max_tokens
         self.chat_template_kwargs = {"enable_thinking": False} if chat_template_kwargs is None else chat_template_kwargs
         self.extra_body = extra_body or {}
         self.session = requests.Session()
@@ -67,29 +70,48 @@ class OpenAICompatibleVLM(VLMBackend):
             self.session.headers["Authorization"] = f"Bearer {api_key}"
 
     def chat(self, messages, schema=None, name="answer", max_tokens=None):
+        """One request: the answer text, its JSON (when a schema was given), the latency in ms and the token counts."""
+        body = self._request_body(messages, schema, name, max_tokens)
+        started = time.perf_counter()
+        reply = self._post(body)
+        message = reply["choices"][0]["message"]
+        text = message.get("content") or ""
+        usage = reply.get("usage", {})
+        out = {"text": text, "ms": 1000 * (time.perf_counter() - started),
+               "prompt_tokens": usage.get("prompt_tokens"), "completion_tokens": usage.get("completion_tokens"),
+               "reasoning": message.get("reasoning_content") or message.get("reasoning")}
+        if schema is not None:
+            out["json"] = _parse_answer(text)
+        return out
+
+    def _request_body(self, messages, schema, name, max_tokens) -> dict:
+        """The JSON body of one chat request; a schema becomes response_format=json_schema, which the server enforces."""
         body = {"model": self.model, "messages": messages, "temperature": self.temperature,
                 "max_tokens": max_tokens or self.max_tokens, **self.extra_body}
         if self.chat_template_kwargs:
             body["chat_template_kwargs"] = dict(self.chat_template_kwargs)
         if schema is not None:
             body["response_format"] = {"type": "json_schema", "json_schema": {"name": name, "schema": schema, "strict": True}}
-        t0 = time.perf_counter()
-        r = self.session.post(f"{self.base_url}/chat/completions", json=body, timeout=self.timeout)
-        r.raise_for_status()
-        d = r.json()
-        msg = d["choices"][0]["message"]
-        text = msg.get("content") or ""
-        usage = d.get("usage", {})
-        out = {"text": text, "ms": 1000 * (time.perf_counter() - t0),
-               "prompt_tokens": usage.get("prompt_tokens"), "completion_tokens": usage.get("completion_tokens"),
-               "reasoning": msg.get("reasoning_content") or msg.get("reasoning")}
-        if schema is not None:
-            try:
-                out["json"] = json.loads(text)
-            except json.JSONDecodeError:
-                m = re.search(r"\{.*\}", text, re.S)
-                out["json"] = json.loads(m.group(0)) if m else None
-        return out
+        return body
+
+    def _post(self, body: dict) -> dict:
+        """Send the request to /chat/completions and return the server's reply as JSON (an HTTP error raises)."""
+        response = self.session.post(f"{self.base_url}/chat/completions", json=body, timeout=self.timeout)
+        response.raise_for_status()
+        return response.json()
+
+
+def _parse_answer(text: str):
+    """The answer text as JSON. When the whole text is not JSON (the model wrapped it in words), the first {...} block in
+    it; None when there is none."""
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    match = re.search(r"\{.*\}", text, re.S)
+    if match is None:
+        return None
+    return json.loads(match.group(0))
 
 
 # ---------------------------------------------------------------------------------------------------------------- choosing one

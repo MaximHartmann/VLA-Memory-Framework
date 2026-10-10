@@ -16,24 +16,21 @@ from collections import Counter
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from vla_memory import TaskSpec  # noqa: E402
 from vla_memory.planner_loop import ExemplarStore, PhaseLabeller, fingerprint_from_task, load_npz_episodes  # noqa: E402
-
-
-def parse_range(s):
-    out = []
-    for part in s.split(","):
-        lo, _, hi = part.partition("-"); out += list(range(int(lo), int(hi or lo) + 1))
-    return out
+from vla_memory.planner_loop.labels import parse_episode_ids  # noqa: E402
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--demos", required=True); ap.add_argument("--episodes", default="0-19")
-    ap.add_argument("--stride", type=int, default=8); ap.add_argument("--out", required=True)
-    ap.add_argument("--task", default=None); ap.add_argument("--cameras", nargs="+", default=["exterior", "wrist"])
+    ap.add_argument("--demos", required=True)
+    ap.add_argument("--episodes", default="0-19")
+    ap.add_argument("--stride", type=int, default=8)
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--task", default=None)
+    ap.add_argument("--cameras", nargs="+", default=["exterior", "wrist"])
     ap.add_argument("--gripper-column", type=int, default=7)
     a = ap.parse_args()
     task = TaskSpec.load(a.task) if a.task else TaskSpec.default()
-    eps = parse_range(a.episodes)
+    eps = parse_episode_ids(a.episodes)
     st = ExemplarStore.build(fingerprint_from_task(task), task, load_npz_episodes(a.demos, eps, a.cameras),
                              PhaseLabeller(task, state_gripper_index=a.gripper_column), a.stride, a.out, camera_names=a.cameras)
     print(f"built {len(st)} entries from {len(eps)} episodes -> {a.out}")

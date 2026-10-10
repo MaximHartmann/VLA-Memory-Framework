@@ -22,35 +22,50 @@ class Fingerprint:
 
 
 def thumbnail(img, th=12, tw=16) -> np.ndarray:
-    im = np.asarray(img)[..., :3]; h, w = im.shape[:2]
-    ys = (np.arange(th) * h // th).clip(0, h - 1); xs = (np.arange(tw) * w // tw).clip(0, w - 1)
-    return (im[np.ix_(ys, xs)].astype(np.float32) / 255.0).ravel()
+    """A th x tw colour thumbnail of the image (pixels sampled on a grid), as one flat vector of values in 0..1."""
+    image = np.asarray(img)[..., :3]
+    height, width = image.shape[:2]
+    rows = (np.arange(th) * height // th).clip(0, height - 1)
+    columns = (np.arange(tw) * width // tw).clip(0, width - 1)
+    return (image[np.ix_(rows, columns)].astype(np.float32) / 255.0).ravel()
 
 
 def colour_mask(img, rules) -> np.ndarray:
     """Pixels satisfying all channel-difference rules [channel_a, channel_b, min_difference] of one colour."""
     im = np.asarray(img)[..., :3].astype(np.int16)
-    m = np.ones(im.shape[:2], dtype=bool)
+    mask = np.ones(im.shape[:2], dtype=bool)
     for a, b, d in rules:
-        m &= (im[..., _CH[a]] - im[..., _CH[b]]) > d
-    return m
+        mask &= (im[..., _CH[a]] - im[..., _CH[b]]) > d
+    return mask
 
 
 def colour_blob(img, rules) -> np.ndarray:
     """Area (log-scaled), centroid, extent and edge contact of the pixels satisfying all channel-difference rules."""
-    m = colour_mask(img, rules)
-    h, w = m.shape; n = int(m.sum())
-    if n < 4:
+    mask = colour_mask(img, rules)
+    height, width = mask.shape
+    count = int(mask.sum())
+    if count < 4:
         return np.zeros(7, np.float32)
-    ys, xs = np.nonzero(m)
-    return np.array([np.log1p(n) / np.log1p(h * w), xs.mean() / w, ys.mean() / h, (xs.max() - xs.min() + 1) / w,
-                     (ys.max() - ys.min() + 1) / h, float(xs.min() == 0), float(ys.min() == 0)], np.float32)
+    ys, xs = np.nonzero(mask)
+    return np.array([np.log1p(count) / np.log1p(height * width), xs.mean() / width, ys.mean() / height,
+                     (xs.max() - xs.min() + 1) / width, (ys.max() - ys.min() + 1) / height,
+                     float(xs.min() == 0), float(ys.min() == 0)], np.float32)
+
+
+def _unit(vector: np.ndarray) -> np.ndarray:
+    """The vector scaled to length 1 (an all-zero vector stays as it is)."""
+    norm = float(np.linalg.norm(vector))
+    if norm > 1e-8:
+        return vector / norm
+    return vector
 
 
 class ColourBlobFingerprint(Fingerprint):
     def __init__(self, colours: dict[str, list], thumb=(12, 16), w_thumb=1.0, w_blob=6.0):
         self.colours = {k: [tuple(r) for r in v] for k, v in colours.items()}
-        self.thumb = tuple(thumb); self.w_thumb = w_thumb; self.w_blob = w_blob
+        self.thumb = tuple(thumb)
+        self.w_thumb = w_thumb
+        self.w_blob = w_blob
 
     def __call__(self, images):
         parts = []
@@ -58,8 +73,7 @@ class ColourBlobFingerprint(Fingerprint):
             parts.append(self.w_thumb * thumbnail(img, *self.thumb))
             for rules in self.colours.values():
                 parts.append(self.w_blob * colour_blob(img, rules))
-        v = np.concatenate(parts).astype(np.float32); n = float(np.linalg.norm(v))
-        return v / n if n > 1e-8 else v
+        return _unit(np.concatenate(parts).astype(np.float32))
 
 
 class ThumbnailFingerprint(Fingerprint):
@@ -69,15 +83,13 @@ class ThumbnailFingerprint(Fingerprint):
         self.thumb = tuple(thumb)
 
     def __call__(self, images):
-        v = np.concatenate([thumbnail(img, *self.thumb) for img in images]).astype(np.float32)
-        n = float(np.linalg.norm(v))
-        return v / n if n > 1e-8 else v
+        return _unit(np.concatenate([thumbnail(img, *self.thumb) for img in images]).astype(np.float32))
 
 
 def fingerprint_from_task(task) -> Fingerprint:
     """Build the fingerprint described in the task file (section `fingerprint`)."""
-    f = dict(task.fingerprint or {})
-    if "colours" in f:
-        return ColourBlobFingerprint(f["colours"], thumb=f.get("thumbnail", (12, 16)),
-                                     w_thumb=f.get("w_thumb", 1.0), w_blob=f.get("w_blob", 6.0))
-    return ThumbnailFingerprint(thumb=f.get("thumbnail", (12, 16)))
+    spec = dict(task.fingerprint or {})
+    if "colours" in spec:
+        return ColourBlobFingerprint(spec["colours"], thumb=spec.get("thumbnail", (12, 16)),
+                                     w_thumb=spec.get("w_thumb", 1.0), w_blob=spec.get("w_blob", 6.0))
+    return ThumbnailFingerprint(thumb=spec.get("thumbnail", (12, 16)))

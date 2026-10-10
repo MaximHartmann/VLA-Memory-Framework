@@ -24,27 +24,30 @@ complete. The skills and their completion rules come from a task specification f
 current step as working memory, a retrieval store of labelled past observations serves as long-term memory, and the
 policy only ever receives the prompt of the current skill.
 
-## Second approach: the history-appended prompt (in development)
+## Second approach: the history-appended prompt
 
 The second method keeps the memory inside the policy's own input. The instruction stays the full sentence, and a
 short text is appended that lists what has already been done ("History: picked up the red block, placed the red
-block."). A policy fine-tuned on such prompts can tell apart phases that look alike from the cameras. The events come
-from the same monitor as in the planner loop, so the method reuses the planner and the exemplar memory and changes
-only the prompt handed to the policy. The policy for the reference task is still in training.
+block."). A policy fine-tuned on such prompts can tell apart phases that look alike from the cameras. Who writes the
+history is exchangeable: rules on the robot's own gripper and hand signals, declared in the task file and checked offline
+before use; the planner loop's VLM monitor; or a simulator's ground truth for reference runs. On the reference task the
+same policy completes 79 of 100 full tasks with the rules writer, 77 with the VLM monitor and 82 with the ground truth,
+differences within noise, against 11 for the memoryless policy. The rules writer runs in real time and needs no model.
 
-## Third approach: RECAP-lite, learning from the policy's own rollouts (in evaluation)
+## Third approach: RECAP-lite, learning from the policy's own rollouts
 
 The third method writes memory into the policy's weights. The policy is run in the simulator, its successful executions are
 kept and turned into training episodes, and the policy is fine-tuned on them mixed with a few original demonstrations. It is the
 filtered-cloning core of RECAP (π*0.6), without the value function, the advantage indicator and the human corrections. The result
-is a drop-in replacement for the policy inside the planner loop; nothing changes at run time. Its 100-seed evaluation is running.
+is a drop-in replacement for the policy inside the planner loop; nothing changes at run time. On the reference task one round
+edges past the parent policy (94 against 92 of 100 full tasks), within noise.
 
 ## Implemented methods
 
 | method | memory used | status | documentation |
 |---|---|---|---|
 | Planner loop with exemplar memory | working memory (plan and current step, held by the proxy); long-term memory (retrieval store of labelled past observations) | implemented and evaluated in simulation | [docs/methods/planner_loop.md](docs/methods/planner_loop/README.md) |
-| History-appended prompt | working memory rendered into the policy's prompt (the completed skills as text); events from the planner loop's monitor and exemplar memory | in development | [docs/methods/history_appended/README.md](docs/methods/history_appended/README.md) |
-| RECAP-lite | parametric long-term memory: the policy's own successful rollouts written into its weights by fine-tuning | in evaluation | [docs/methods/recap/README.md](docs/methods/recap/README.md) |
+| History-appended prompt | working memory rendered into the policy's prompt (the completed skills as text), written by rules on the robot's signals from the task file, by the planner loop's VLM monitor, or by a simulator's ground truth | implemented and evaluated in simulation | [docs/methods/history_appended/README.md](docs/methods/history_appended/README.md) |
+| RECAP-lite | parametric long-term memory: the policy's own successful rollouts written into its weights by fine-tuning | implemented and evaluated in simulation | [docs/methods/recap/README.md](docs/methods/recap/README.md) |
 
 Each further method gets its own page under `docs/methods/` and a row in this table.

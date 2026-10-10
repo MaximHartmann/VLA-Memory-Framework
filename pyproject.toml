@@ -14,7 +14,7 @@ dependencies = ["numpy>=1.24", "pillow>=9", "requests>=2.28", "pyyaml>=6"]
 proxy = ["websockets>=12", "openpi-client"]   # openpi-client: pip install from the openpi repository (packages/openpi-client)
 
 [project.scripts]
-vla-memory-proxy = "vla_memory.planner_loop.proxy:main"
+vla-memory-proxy = "vla_memory.planner_loop.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["vla_memory*"]

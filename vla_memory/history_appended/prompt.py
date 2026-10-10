@@ -12,10 +12,13 @@ from typing import Sequence
 
 class HistoryPrompt:
     def __init__(self, task):
-        h = dict(task.history or {})
+        history = dict(task.history or {})
         self.task = task
-        self.prefix = h.get("prefix", " History: "); self.none = h.get("none", "none yet")
-        self.events = dict(h.get("events", {})); self.joiner = h.get("joiner", ", "); self.suffix = h.get("suffix", ".")
+        self.prefix = history.get("prefix", " History: ")
+        self.none = history.get("none", "none yet")
+        self.events = dict(history.get("events", {}))
+        self.joiner = history.get("joiner", ", ")
+        self.suffix = history.get("suffix", ".")
 
     def event(self, skill: str) -> str:
         """The past-tense phrase of one completed skill; a verb without a phrase falls back to the skill string."""
@@ -23,8 +26,10 @@ class HistoryPrompt:
         return self.events.get(verb, skill).format(object=obj)
 
     def history_text(self, done_skills: Sequence[str]) -> str:
-        body = self.joiner.join(self.event(s) for s in done_skills) if done_skills else self.none
-        return body + self.suffix
+        """The phrases of the completed skills (or the phrase for an empty history), with the suffix."""
+        if not done_skills:
+            return self.none + self.suffix
+        return self.joiner.join(self.event(skill) for skill in done_skills) + self.suffix
 
     def render(self, instruction: str, done_skills: Sequence[str]) -> str:
         """The prompt handed to the policy."""

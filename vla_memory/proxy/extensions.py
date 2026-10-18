@@ -24,6 +24,8 @@ oracle and off:
     start_episode     a new episode begins
     before_decision   every call, before the VLM writer's planner decides
     after_decision    every call, after the VLM writer's planner decided
+    before_policy     every call, after the prompt is decided and before the observation goes to the policy; may add
+                      keys to the observation or change its prompt; returns fields for the proxy log
     on_reply          after the policy answered; may change the reply; returns a record for the proxy log, or None
     end_episode       an episode has ended; returns a record for the writer's log, or None
     log_fields        fields added to every proxy log record
@@ -40,6 +42,7 @@ from ..plugins import resolve
 
 # registered name -> class, or its import path "module:Class" (imported only when the name is given with --with)
 EXTENSIONS: dict[str, Any] = {
+    "memory_policy": "vla_memory.methods.memory_policy.extension:MemoryPolicyExtension",   # the retrieved moment
 }
 EXTENSION_ENTRY_POINTS = "vla_memory.extensions"
 
@@ -121,6 +124,11 @@ class Extension:
 
     def after_decision(self, ctrl: dict, images: list, record: dict, planner) -> None:
         """Every call, after the planner decided."""
+
+    def before_policy(self, obs: dict, ctrl: dict, prompt: str, writer) -> dict:
+        """Every call, after the prompt is decided and before the observation goes to the policy. May add keys to `obs`
+        or change obs["prompt"]. Returns fields for the proxy log."""
+        return {}
 
     def on_reply(self, obs: dict, ctrl: dict, reply: dict, skill: str | None, episode: str) -> dict | None:
         """After the policy answered. May change `reply` in place. Returns a record for the proxy log, or None."""

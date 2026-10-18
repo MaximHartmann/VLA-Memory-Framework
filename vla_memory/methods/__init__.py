@@ -4,6 +4,7 @@ on a writer's signal, base.METHODS their registry; one of them is chosen with --
     history.method.HistoryMethod   the instruction with a line per completed skill (the history-appended prompt)
 
 Other memories plug in with --with NAME (proxy/extensions.py):
+    memory_policy                  a store of moments of recorded episodes, the nearest one handed to the policy
 """
 from .base import METHODS, Method, register_method, resolve_method
 

@@ -305,10 +305,18 @@ index 6570df0..3ba01eb 100644
          output_transforms=[
              *data_config.model_transforms.outputs,
 diff --git a/src/openpi/training/config.py b/src/openpi/training/config.py
-index 4ca47e1..eedae90 100644
+index 4ca47e1..452a638 100644
 --- a/src/openpi/training/config.py
 +++ b/src/openpi/training/config.py
-@@ -20,6 +20,7 @@ import openpi.models.tokenizer as _tokenizer
+@@ -5,6 +5,7 @@ from collections.abc import Sequence
+ import dataclasses
+ import difflib
+ import logging
++import os
+ import pathlib
+ from typing import Any, Literal, Protocol, TypeAlias
+ 
+@@ -20,6 +21,7 @@ import openpi.models.tokenizer as _tokenizer
  import openpi.policies.aloha_policy as aloha_policy
  import openpi.policies.droid_policy as droid_policy
  import openpi.policies.libero_policy as libero_policy
@@ -316,7 +324,7 @@ index 4ca47e1..eedae90 100644
  import openpi.shared.download as _download
  import openpi.shared.normalize as _normalize
  import openpi.training.droid_rlds_dataset as droid_rlds_dataset
-@@ -355,6 +356,80 @@ class LeRobotLiberoDataConfig(DataConfigFactory):
+@@ -355,6 +357,133 @@ class LeRobotLiberoDataConfig(DataConfigFactory):
          )
  
  
@@ -394,10 +402,63 @@ index 4ca47e1..eedae90 100644
 +        )
 +
 +
++@dataclasses.dataclass(frozen=True)
++class LeRobotRedBlueMemoryDataConfig(DataConfigFactory):
++    """red/blue data with a retrieved memory per frame (VLA-Memory-Framework: docs/methods/memory_policy).
++
++    The dataset (hartmann/red_blue_v2_abs_memory_{train,val}, written by relabel_memory.py)
++    carries, next to the LeRobotRedBlueDataConfig columns, a third image column
++    `memory_image` -- the retrieved moment's wrist picture, dtype "image" and 240x320x3
++    exactly like `wrist_image` -- and a per-frame task string "<skill>. memory: <sentence>"
++    (red_blue_policy.MEMORY_MARKER), e.g. "pick up the red block. memory: release at step 3".
++    Both arms of the experiment read the SAME dataset:
++
++      use_memory=True   policy A: memory_image -> right_wrist_0_rgb with its mask on; the
++                        prompt is skill + sentence (RedBlueMemoryInputs).
++      use_memory=False  policy B, the control: the column is not repacked and
++                        RedBlueDropMemory cuts the prompt at the marker, so the model sees
++                        today's inputs (two images, the skill prompt, third slot zeros and
++                        masked out) on identical frames.
++
++    Absolute joint targets and NO delta transform, as in the v2 configs
++    (_red_blue_abs_ablation with delta=False). Norm stats cover state and actions only,
++    so they are identical for both arms.
++    """
++
++    use_memory: bool = True
++
++    @override
++    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
++        structure = {
++            "observation/image": "image",
++            "observation/wrist_image": "wrist_image",
++            "observation/state": "state",
++            "actions": "actions",
++            "prompt": "prompt",
++        }
++        if self.use_memory:
++            structure["observation/memory_image"] = "memory_image"
++        repack_transform = _transforms.Group(inputs=[_transforms.RepackTransform(structure)])
++
++        inputs = [red_blue_policy.RedBlueMemoryInputs(model_type=model_config.model_type)]
++        if not self.use_memory:
++            inputs.insert(0, red_blue_policy.RedBlueDropMemory())
++        data_transforms = _transforms.Group(inputs=inputs, outputs=[red_blue_policy.RedBlueOutputs()])
++
++        model_transforms = ModelTransformFactory()(model_config)
++
++        return dataclasses.replace(
++            self.create_base_config(assets_dirs, model_config),
++            repack_transforms=repack_transform,
++            data_transforms=data_transforms,
++            model_transforms=model_transforms,
++        )
++
++
  @dataclasses.dataclass(frozen=True)
  class RLDSDroidDataConfig(DataConfigFactory):
      """
-@@ -504,6 +579,10 @@ class TrainConfig:
+@@ -504,6 +633,10 @@ class TrainConfig:
      seed: int = 42
      # Global batch size.
      batch_size: int = 32
@@ -408,7 +469,7 @@ index 4ca47e1..eedae90 100644
      # Number of workers to use for the data loader. Increasing this number will speed up data loading but
      # will increase memory and CPU usage.
      num_workers: int = 2
-@@ -554,9 +633,66 @@ class TrainConfig:
+@@ -554,9 +687,96 @@ class TrainConfig:
      def __post_init__(self) -> None:
          if self.resume and self.overwrite:
              raise ValueError("Cannot resume and overwrite at the same time.")
@@ -425,7 +486,7 @@ index 4ca47e1..eedae90 100644
 +    Both arms train on ABSOLUTE joint targets with the two fixes the
 +    conditioning diagnostics called for, and differ ONLY in the dataset's
 +    prompts: per-frame subgoals (red_blue_blocks_abs_subgoal_train, written by
-+    scripts/relabel_subgoals.py) or the static full instruction
++    training/relabel_subgoals.py) or the static full instruction
 +    (red_blue_blocks_abs_train). One function builds both, so they cannot drift.
 +
 +      discrete_state_input=True   pi05 reads the joint state ONLY as prompt
@@ -472,10 +533,40 @@ index 4ca47e1..eedae90 100644
 +    )
 +
 +
++def _red_blue_memory_arm(name: str, repo_id: str, *, memory: bool) -> TrainConfig:
++    """One arm of the retrieval-memory experiment (VLA-Memory-Framework: docs/methods/memory_policy).
++
++    Policy A (memory=True) sees the two camera images, the retrieved moment's wrist
++    picture in the third image slot and the prompt "<skill>. memory: <sentence>";
++    policy B (memory=False, the control) sees the same frames with today's inputs.
++    Everything else is the v2 sub-goal recipe, _red_blue_abs_ablation(state=False,
++    delta=False): pi05_base, LoRA on both transformers, absolute targets, no state
++    tokens, no DeltaActions, batch 16, AdamW with clip 1.0 -- shortened to 20,000
++    steps (cosine 2.5e-5 -> 2.5e-6 over the 20,000 steps, 1,000 warm-up). One
++    function builds both arms, so they cannot drift.
++    """
++    arm = _red_blue_abs_ablation(name, repo_id, state=False, delta=False)
++    return dataclasses.replace(
++        arm,
++        data=LeRobotRedBlueMemoryDataConfig(
++            repo_id=repo_id,
++            base_config=DataConfig(prompt_from_task=True),
++            use_memory=memory,
++        ),
++        lr_schedule=_optimizer.CosineDecaySchedule(
++            warmup_steps=1_000,
++            peak_lr=2.5e-5,
++            decay_steps=20_000,
++            decay_lr=2.5e-6,
++        ),
++        num_train_steps=20_000,
++    )
++
++
  _CONFIGS = [
      #
      # Inference Aloha configs.
-@@ -761,6 +897,36 @@ _CONFIGS = [
+@@ -761,6 +981,44 @@ _CONFIGS = [
          pytorch_weight_path="/path/to/your/pytorch_weight_path",
          num_train_steps=30_000,
      ),
@@ -484,16 +575,17 @@ index 4ca47e1..eedae90 100644
 +    # dirs get their own norm stats.
 +    _red_blue_abs_ablation("pi05_red_blue_v2_subgoal", "hartmann/red_blue_v2_abs_subgoal_train", state=False, delta=False),
 +    _red_blue_abs_ablation("pi05_red_blue_v2_monolith", "hartmann/red_blue_v2_abs_train", state=False, delta=False),
-+    # v2 history arm (2026-09-27): monolith instruction + " History: <events so far>" per frame (scripts/relabel_history.py),
++    # v2 history arm (2026-09-27): monolith instruction + " History: <events so far>" per frame (training/relabel_history.py),
 +    # the UniMem-style textual event memory inside the VLA prompt; same images/state/actions as the monolith data.
 +    _red_blue_abs_ablation("pi05_red_blue_v2_history", "hartmann/red_blue_v2_abs_history_train", state=False, delta=False),
 +    # RECAP-lite (2026-09-28): continue the SELECTED subgoal checkpoint (20000) on the agent's own successful closed-loop
 +    # rollouts (seeds 2001-2200, oracle prompts) mixed with 40 original demos; same LoRA config and norm stats as the
-+    # parent so the loaded weights stay consistent; short schedule with a lower peak LR.
++    # parent so the loaded weights stay consistent; short schedule with a lower peak LR. The parent checkpoint is read
++    # from $RUNS/checkpoints: set RUNS to the folder whose checkpoints/ holds the parent's run.
 +    dataclasses.replace(
 +        _red_blue_abs_ablation("pi05_red_blue_v2_subgoal_recap", "hartmann/red_blue_v2_recap_subgoal_train", state=False, delta=False),
 +        weight_loader=weight_loaders.CheckpointWeightLoader(
-+            "/data/mhartmann/vla-runs/checkpoints/pi05_red_blue_v2_subgoal/v2_1gpu/20000/params"),
++            os.environ.get("RUNS", "$RUNS") + "/checkpoints/pi05_red_blue_v2_subgoal/v2_1gpu/20000/params"),
 +        num_train_steps=5_000,
 +        lr_schedule=_optimizer.CosineDecaySchedule(warmup_steps=200, peak_lr=1.0e-5, decay_steps=5_000, decay_lr=1.0e-6),
 +    ),
@@ -505,10 +597,17 @@ index 4ca47e1..eedae90 100644
 +    dataclasses.replace(
 +        _red_blue_abs_ablation("pi05_red_blue_v2_subgoal_recapfull", "hartmann/red_blue_v2_recapfull_r1_train", state=False, delta=False),
 +        weight_loader=weight_loaders.CheckpointWeightLoader(
-+            "/data/mhartmann/vla-runs/checkpoints/pi05_red_blue_v2_subgoal/v2_1gpu/20000/params"),
++            os.environ.get("RUNS", "$RUNS") + "/checkpoints/pi05_red_blue_v2_subgoal/v2_1gpu/20000/params"),
 +        num_train_steps=5_000,
 +        lr_schedule=_optimizer.CosineDecaySchedule(warmup_steps=200, peak_lr=1.0e-5, decay_steps=5_000, decay_lr=1.0e-6),
 +    ),
++    # Retrieval memory (VLA-Memory-Framework: docs/methods/memory_policy): two fresh policies from pi05_base on the
++    # SAME frames (the demonstrations + the nudge episodes' expert corrections, labelled by relabel_memory.py with each
++    # frame's nearest moment from ANOTHER episode). A reads the memory -- the moment's wrist picture in the third image
++    # slot, its movement as "<skill>. memory: <sentence>" -- while B (control) gets today's inputs, so A - B isolates
++    # the memory from the extra correction data. v2 sub-goal recipe, 20,000 steps each; norm stats identical.
++    _red_blue_memory_arm("pi05_red_blue_v2_memory", "hartmann/red_blue_v2_abs_memory_train", memory=True),
++    _red_blue_memory_arm("pi05_red_blue_v2_memory_control", "hartmann/red_blue_v2_abs_memory_train", memory=False),
      #
      # Fine-tuning Aloha configs.
      #
@@ -557,10 +656,10 @@ index 272375e..70adc16 100644
      stride: int
 diff --git a/src/openpi/policies/red_blue_policy.py b/src/openpi/policies/red_blue_policy.py
 new file mode 100644
-index 0000000..b69670f
+index 0000000..1c14108
 --- /dev/null
 +++ b/src/openpi/policies/red_blue_policy.py
-@@ -0,0 +1,102 @@
+@@ -0,0 +1,217 @@
 +"""Policy transforms for the red/blue sequential pick-and-place task.
 +
 +Modelled on ``libero_policy``, which our dataset matches in shape (8-D state,
@@ -663,3 +762,118 @@ index 0000000..b69670f
 +        # take back exactly our 8 (7 joints + gripper). See module docstring for
 +        # why this is 8 and not LIBERO's 7.
 +        return {"actions": np.asarray(data["actions"][..., :ACTION_DIM])}
++
++
++# ---------------------------------------------------------------------------
++# Retrieval memory (VLA-Memory-Framework: docs/methods/memory_policy)
++#
++# Policy A receives, next to the two live cameras, the most similar stored
++# moment of an earlier episode: its wrist picture in the third image slot and
++# the movement made there as one sentence appended to the skill prompt. The
++# dataset column is `memory_image` (same dtype and size as `wrist_image`); the
++# prompt is "<skill>. memory: <sentence>", e.g.
++# "pick up the red block. memory: release at step 3".
++# ---------------------------------------------------------------------------
++
++# Separates the skill from the retrieved moment's sentence. Written by the
++# labelling script (relabel_memory.py), cut off by RedBlueDropMemory for the
++# control arm, and used by the framework hook that assembles the prompt at
++# inference. The skill prompt itself never contains it.
++MEMORY_MARKER = ". memory:"
++
++
++def strip_memory(prompt: str) -> str:
++    """'pick up the red block. memory: release at step 3' -> 'pick up the red block'.
++
++    Cuts at the FIRST marker; a prompt without one is returned unchanged.
++    """
++    return prompt.split(MEMORY_MARKER, 1)[0]
++
++
++def _prompt_text(prompt) -> str:
++    # PromptFromLeRobotTask and the policy client hand over str; InjectDefaultPrompt a 0-d array.
++    return prompt if isinstance(prompt, str) else str(np.asarray(prompt).item())
++
++
++def make_red_blue_memory_example() -> dict:
++    """Creates a random input example for the memory policy (policy A)."""
++    return {
++        **make_red_blue_example(),
++        "observation/memory_image": np.random.randint(256, size=(224, 224, 3), dtype=np.uint8),
++        "prompt": "pick up the red block" + MEMORY_MARKER + " release at step 3",
++    }
++
++
++@dataclasses.dataclass(frozen=True)
++class RedBlueMemoryInputs(transforms.DataTransformFn):
++    """RedBlueInputs plus the retrieved moment's wrist picture in the third image slot.
++
++    ``observation/memory_image`` goes into ``right_wrist_0_rgb`` with its image mask
++    ON, so the PaliGemma prefix attends to its 256 tokens like to the two live
++    cameras. Without the key -- datasets without the column, the control arm after
++    RedBlueDropMemory, inference without a memory -- or with an all-zero picture
++    (the labelling script's value for "no memory"), the slot is zeros and masked
++    out, which is exactly what RedBlueInputs does today.
++
++    The prompt is passed through untouched: the memory sentence travels inside it
++    ("<skill>. memory: <sentence>") and is tokenized by the model transforms. Used
++    for both training and inference.
++    """
++
++    model_type: _model.ModelType
++
++    def __call__(self, data: dict) -> dict:
++        base_image = _parse_image(data["observation/image"])
++        wrist_image = _parse_image(data["observation/wrist_image"])
++
++        memory_image = data.get("observation/memory_image")
++        if memory_image is not None:
++            memory_image = _parse_image(memory_image)
++        if memory_image is None or not memory_image.any():
++            # No memory: today's behaviour for the unused right wrist slot.
++            memory_image = np.zeros_like(base_image)
++            memory_mask = np.True_ if self.model_type == _model.ModelType.PI0_FAST else np.False_
++        else:
++            memory_mask = np.True_
++
++        inputs = {
++            "state": data["observation/state"],
++            "image": {
++                "base_0_rgb": base_image,
++                "left_wrist_0_rgb": wrist_image,
++                "right_wrist_0_rgb": memory_image,
++            },
++            "image_mask": {
++                "base_0_rgb": np.True_,
++                "left_wrist_0_rgb": np.True_,
++                "right_wrist_0_rgb": memory_mask,
++            },
++        }
++
++        # Actions are only present during training.
++        if "actions" in data:
++            inputs["actions"] = data["actions"]
++
++        if "prompt" in data:
++            inputs["prompt"] = data["prompt"]
++
++        return inputs
++
++
++@dataclasses.dataclass(frozen=True)
++class RedBlueDropMemory(transforms.DataTransformFn):
++    """The control arm (policy B): removes the memory from an example.
++
++    Drops ``observation/memory_image`` and cuts the prompt at MEMORY_MARKER, so the
++    RedBlueMemoryInputs that follows produces exactly today's inputs -- two images,
++    the skill prompt, third slot zeros and masked out -- on the SAME frames as the
++    memory arm. Also applied at inference, so a client that sends a memory to the
++    control policy is harmless.
++    """
++
++    def __call__(self, data: dict) -> dict:
++        data = dict(data)
++        data.pop("observation/memory_image", None)
++        if "prompt" in data:
++            data["prompt"] = strip_memory(_prompt_text(data["prompt"]))
++        return data

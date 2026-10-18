@@ -49,5 +49,6 @@ prompt texts come from a task file (`vla_memory/tasks/red_blue_blocks.yaml`).
 | method | memory used | how it plugs in | page |
 |---|---|---|---|
 | RECAP-lite | parametric long-term memory: the policy's own successful rollouts written into its weights by fine-tuning; one round completes 94 of 100 against 92 for the parent (ground-truth sub-goals), within noise | a new policy behind any writer and method | [docs/methods/recap](docs/methods/recap/README.md) |
+| Memory policy | long-term memory read by the policy: the stored moment of recorded episodes most similar to the current one (its wrist picture and the next movement as a sentence) in the policy's input at every call; the policy reads it, but it does not improve it (98 of 100 with memory, 96 without) | `--with memory_policy` | [docs/methods/memory_policy](docs/methods/memory_policy/README.md) |
 
 Each further writer or method gets its own page under `docs/writers/` or `docs/methods/` and a row in these tables.

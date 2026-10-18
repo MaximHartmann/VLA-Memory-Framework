@@ -3,9 +3,7 @@
 A task is a set of objects, a set of verbs, a skill template that combines them into the exact prompt strings the
 VLA policy was trained on, a written completion rule per verb, the system texts for the planner model, and the
 JSON schemas that force the model's answers into the skill vocabulary. Nothing task-specific lives in the code:
-see vla_memory/tasks/red_blue_blocks.yaml for the reference task (two cubes, pick and place) and
-vla_memory/tasks/drawers.yaml for a task without pick and place (open and close drawers; extra signals, signal triggers and
-its own monitor fields).
+see vla_memory/tasks/red_blue_blocks.yaml for the reference task (two cubes, pick and place).
 """
 from __future__ import annotations
 
@@ -74,7 +72,7 @@ class TaskSpec:
 
     @classmethod
     def packaged(cls, name: str) -> "TaskSpec":
-        """A task file shipped with the package (vla_memory/tasks/NAME.yaml): red_blue_blocks, drawers."""
+        """A task file shipped with the package (vla_memory/tasks/NAME.yaml), e.g. red_blue_blocks."""
         return cls.load(_HERE / "tasks" / f"{name}.yaml")
 
     # ------------------------------------------------------------------ skills

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stage 2: staged .npz episodes -> a LeRobot dataset openpi can train on.
 
-Runs inside openpi.sif (lerobot lives there, Isaac Sim does not).
+Run it in the openpi environment (lerobot is installed there, Isaac Sim is not).
 
 Schema follows openpi's own LIBERO converter, whose comment is the contract:
 "OpenPi assumes that proprio is stored in `state` and actions in `actions`.
@@ -22,12 +22,12 @@ import numpy as np
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--raw-dir", default="/workspace/data/demos_raw")
+    ap.add_argument("--raw-dir", required=True, help="the folder of the staged .npz episodes")
     ap.add_argument("--repo-id", default="hartmann/red_blue_blocks")
-    ap.add_argument("--root", default="/workspace/data/lerobot")
+    ap.add_argument("--root", required=True, help="the LeRobot root folder the dataset is written to")
     ap.add_argument("--fps", type=int, default=15)
     ap.add_argument("--use-videos", action="store_true", default=True,
-                    help="MP4 per episode instead of PNG per frame; far kinder to BeeGFS")
+                    help="MP4 per episode instead of PNG per frame; far kinder to a network file system")
     ap.add_argument("--no-videos", dest="use_videos", action="store_false")
     ap.add_argument("--overwrite", action="store_true")
     ap.add_argument("--start", type=int, default=0,

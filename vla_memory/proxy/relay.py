@@ -11,6 +11,7 @@ The environment sends its ordinary observation with the FULL instruction as `pro
     2. writer.before_call      a writer that decides from this call's inputs
     3. method.prompt           the prompt of this call shows that decision (with the writer "off": the instruction)
     4. method.before_policy    keys added to the observation (a picture)
+       extensions' before_policy   keys added by the extensions (a retrieved memory)
     5. the policy's call
     6. the extensions' on_reply, then writer.after_call: a writer that decides from the policy's reply; its decision shows
        from the next call on
@@ -86,6 +87,8 @@ class Relay:
         info.update(collect(self.extensions, "log_fields"))
         obs["prompt"] = prompt
         info.update(self.method.before_policy(obs, ctrl, self.writer))
+        for extension in self.extensions:
+            info.update(extension.before_policy(obs, ctrl, prompt, self.writer.monitor))
         info["prompt"] = obs["prompt"]
         info["oracle_prompt"] = ctrl.get("oracle_prompt")
         reply = self._forward(obs, info)

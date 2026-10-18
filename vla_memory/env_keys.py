@@ -1,6 +1,5 @@
-"""The environment's side of the contract: the memory/ control keys a simulator or robot sends with every policy call
-(docs/ENVIRONMENT_CONTRACT.md, section 3), built from its raw signals, so that a new environment does not rebuild the per-step
-buffers by hand.
+"""The environment's side: the memory/ control keys a simulator or robot sends with every policy call, built from its raw
+signals, so that a new environment does not rebuild the per-step buffers by hand.
 
     keys = ControlKeys(task)                    # one per environment lane; the task names its extra signals (task.signals)
     keys.start_episode("seed7")                 # the next call carries memory/new_episode
@@ -26,8 +25,7 @@ observation() is the policy's own keys, the FULL instruction as `prompt`, and ca
     signal_steps                   {name: float32 (n,)}: the task's declared signals over the same steps, this step included, also
                                    at the first call of an episode (sent for a task that declares signals)
 A key is sent only if its value is known and it is in `include` (default: every key of CONTROL_KEYS); a value not given is NaN
-inside the per-step arrays. The reference bench (scripts/zeroshot_bench.py of the research code) builds the same keys by hand
-(contract, section 5, "Adopting ControlKeys").
+inside the per-step arrays.
 """
 from __future__ import annotations
 
@@ -92,7 +90,7 @@ class ControlKeys:
         self.include = tuple(CONTROL_KEYS if include is None else include)
         unknown = [k for k in self.include if k not in CONTROL_KEYS]
         if unknown:
-            raise ValueError(f"unknown control keys {unknown}; the contract has {CONTROL_KEYS}")
+            raise ValueError(f"unknown control keys {unknown}; the known keys are {CONTROL_KEYS}")
         self.start_episode()
 
     def start_episode(self, episode_id: Any = None):

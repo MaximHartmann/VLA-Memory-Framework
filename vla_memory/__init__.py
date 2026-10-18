@@ -21,6 +21,7 @@ Two layers, chosen with --writer NAME and --method NAME (docs/writers/<name>/REA
   methods                    turn that signal into what the policy receives:
                                subgoal    the current skill
                                history    the instruction with the completed skills
+                               keyframe   the instruction and the picture of the last key moment
                              other memories plug in as extensions (--with NAME)
   proxy                      the relay between the environment and the policy server that runs a writer and a method:
                              python -m vla_memory.proxy

@@ -11,6 +11,7 @@ data, and our changes to openpi (commit 215abfb). Not needed to run the proxy.
 | `relabel_subgoals.py` | the sub-goal policy's data: each frame's prompt becomes the active skill ("pick up the red block", ...), by waypoint phase |
 | `relabel_history.py` | the history policy's data: each frame's prompt becomes the full instruction plus "History: <events so far>" |
 | `relabel_memory.py` | the memory policy's data: the memory store built from the training datasets, and each frame's retrieved memory (the image column `memory_image`, the prompt "<skill>. memory: <sentence>") |
+| `relabel_keyframe.py` | the keyframe policy's data: each frame with the wrist picture of the episode's last key moment (the image column `memory_image`) |
 | `fit_event_head.py` | the event head of the history policy (`docs/writers/head/README.md`): training rows from recorded rollouts of the policy, their features from the frozen policy, the fit on the CPU |
 | `openpi/openpi_changes.patch` | our changes to openpi: the input and output transforms (`src/openpi/policies/red_blue_policy.py`), the data and training configs (`src/openpi/training/config.py`), a weight guard and optional gradient accumulation in `scripts/train.py`, and the inference-time centre crop (`serve_policy.py --policy.center_crop`) |
 
@@ -42,6 +43,7 @@ data, and our changes to openpi (commit 215abfb). Not needed to run the proxy.
 | `pi05_red_blue_v2_history` | the history method's | `hartmann/red_blue_v2_abs_history_train` |
 | `pi05_red_blue_v2_subgoal_recap` | RECAP-lite | `hartmann/red_blue_v2_recap_subgoal_train` |
 | `pi05_red_blue_v2_memory`, `pi05_red_blue_v2_memory_control` | the memory policy and its control | `hartmann/red_blue_v2_abs_memory_train` |
+| `pi05_red_blue_v2_keyframe` | the keyframe method's | `hartmann/red_blue_v2_abs_keyframe_train` |
 
 The RECAP configs continue from the sub-goal policy's checkpoint at
 `$RUNS/checkpoints/pi05_red_blue_v2_subgoal/v2_1gpu/20000/params`: set `RUNS` to the folder whose `checkpoints/` holds that

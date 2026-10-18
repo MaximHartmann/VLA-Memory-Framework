@@ -11,6 +11,7 @@ Writers (--writer):
 Methods (--method):
     subgoal    the current skill as the prompt (default)
     history    the instruction with a line per completed skill
+    keyframe   the instruction, and the wrist picture of the last key moment as a third picture
 
 Option groups: the connection (--listen-port, --upstream-port, --upstream-host, --transport, --transport-arg, --log), the
 task and the choices (--task, --writer, --method, --image-keys), and the extensions (--with NAME, repeatable). The chosen

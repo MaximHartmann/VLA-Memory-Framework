@@ -305,7 +305,7 @@ index 6570df0..3ba01eb 100644
          output_transforms=[
              *data_config.model_transforms.outputs,
 diff --git a/src/openpi/training/config.py b/src/openpi/training/config.py
-index 4ca47e1..452a638 100644
+index 4ca47e1..47c886b 100644
 --- a/src/openpi/training/config.py
 +++ b/src/openpi/training/config.py
 @@ -5,6 +5,7 @@ from collections.abc import Sequence
@@ -566,7 +566,7 @@ index 4ca47e1..452a638 100644
  _CONFIGS = [
      #
      # Inference Aloha configs.
-@@ -761,6 +981,44 @@ _CONFIGS = [
+@@ -761,6 +981,57 @@ _CONFIGS = [
          pytorch_weight_path="/path/to/your/pytorch_weight_path",
          num_train_steps=30_000,
      ),
@@ -608,6 +608,19 @@ index 4ca47e1..452a638 100644
 +    # the memory from the extra correction data. v2 sub-goal recipe, 20,000 steps each; norm stats identical.
 +    _red_blue_memory_arm("pi05_red_blue_v2_memory", "hartmann/red_blue_v2_abs_memory_train", memory=True),
 +    _red_blue_memory_arm("pi05_red_blue_v2_memory_control", "hartmann/red_blue_v2_abs_memory_train", memory=False),
++    # Keyframe policy (VLA-Memory-Framework: docs/methods/keyframe): the memoryless policy (pi05_red_blue_v2_monolith:
++    # plain instruction, v2 recipe, 30,000 steps) fresh from pi05_base on the same frames, plus the WRIST picture of the
++    # episode's last key moment (picked up red / placed red / picked up blue; all-zero before the first) as memory_image,
++    # which the memory data config puts into the third image slot (mask on; all-zero -> zeros, mask off). use_memory=True:
++    # the prompt passes through untouched, so it stays the plain instruction (written by training/relabel_keyframe.py).
++    dataclasses.replace(
++        _red_blue_abs_ablation("pi05_red_blue_v2_keyframe", "hartmann/red_blue_v2_abs_keyframe_train", state=False, delta=False),
++        data=LeRobotRedBlueMemoryDataConfig(
++            repo_id="hartmann/red_blue_v2_abs_keyframe_train",
++            base_config=DataConfig(prompt_from_task=True),
++            use_memory=True,
++        ),
++    ),
      #
      # Fine-tuning Aloha configs.
      #

@@ -39,6 +39,7 @@ seeds of 500 control steps, a policy call every 8 steps:
 |---|---|
 | sub-goal | 92 |
 | history | 82 |
+| keyframe | 78 |
 
 - The oracle is an upper bound only for when the skills switch, not for the result: with the sub-goal method the rules writer
   and the VLM planner completed 94 each, with the history method 79 and 77. The failures with every writer are mostly the

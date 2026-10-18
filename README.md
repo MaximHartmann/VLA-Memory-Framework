@@ -42,6 +42,7 @@ prompt texts come from a task file (`vla_memory/tasks/red_blue_blocks.yaml`).
 |---|---|---|---|
 | `subgoal` | the prompt of the current skill; the policy is trained on the short skills | the writer's plan and pointer, held by the proxy | [docs/methods/subgoal](docs/methods/subgoal/README.md) |
 | `history` | the full instruction with a line per completed skill; the policy is trained on such prompts | the completed skills as text in the policy's input | [docs/methods/history](docs/methods/history/README.md) |
+| `keyframe` | the plain instruction, and in the third image slot the wrist picture of the moment the last skill was completed | a picture of the last key moment in the policy's input | [docs/methods/keyframe](docs/methods/keyframe/README.md) |
 
 `--writer off` hands the policy the instruction unchanged.
 
@@ -55,6 +56,7 @@ combination is supported but was not measured.
 |---|---|---|---|---|
 | `subgoal` | 92 | 94 | 94 | |
 | `history` | 82 | 79 | 77 | 78 |
+| `keyframe` | 78 | 75 | | |
 
 For each method the writers are within noise of each other; the memoryless policy, trained on the full instruction, completes
 11. The VLM writer ran without a store with the sub-goal method (87 with a store of 20 recorded episodes) and with that store

@@ -2,6 +2,8 @@
 
     subgoal    the policy gets the current skill as its prompt
     history    the policy gets the instruction with a line per completed skill
+    keyframe   the policy gets the instruction, and the wrist picture of the last completed skill's moment in its third
+               image slot
 
 A method's prompt() is asked after the writer's before_call, so a writer that decides before the policy call shows its
 decision in the same call; before_policy() may add keys to the observation (a picture) and returns fields for the proxy's
@@ -21,6 +23,7 @@ from ..plugins import resolve
 METHODS: dict[str, Any] = {
     "subgoal": "vla_memory.methods.subgoal:SubgoalMethod",              # the current skill as the prompt
     "history": "vla_memory.methods.history.method:HistoryMethod",       # the instruction and the completed skills
+    "keyframe": "vla_memory.methods.keyframe.method:KeyframeMethod",    # the picture of the last key moment
 }
 METHOD_ENTRY_POINTS = "vla_memory.methods"
 

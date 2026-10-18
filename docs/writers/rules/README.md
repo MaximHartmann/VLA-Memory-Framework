@@ -65,6 +65,7 @@ seeds of 500 control steps, a policy call every 8 steps:
 |---|---|---|
 | sub-goal | 94 | the same policy call in 275 of 286 switches, never more than one call apart; 55 s per episode (84 s with the VLM planner) |
 | history | 79 | the history equal to the ground truth's in 6297 of 6300 policy calls |
+| keyframe | 75 | |
 
 - With each method the rules writer is within noise of the simulator's ground truth and, where both ran, of the VLM
   planner. For a task whose skill order is known it replaces both, in real time and without a model; the planner is needed

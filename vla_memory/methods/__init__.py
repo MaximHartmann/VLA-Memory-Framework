@@ -2,6 +2,7 @@
 on a writer's signal, base.METHODS their registry; one of them is chosen with --method NAME:
     subgoal.SubgoalMethod          the current skill as the prompt
     history.method.HistoryMethod   the instruction with a line per completed skill (the history-appended prompt)
+    keyframe.method.KeyframeMethod the instruction, and the wrist picture of the last key moment as a third picture
 
 Other memories plug in with --with NAME (proxy/extensions.py):
     memory_policy                  a store of moments of recorded episodes, the nearest one handed to the policy

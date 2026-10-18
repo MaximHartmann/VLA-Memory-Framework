@@ -1,7 +1,7 @@
 """Long-term memory interface. A memory store answers one question at every planner decision: 'what do we know
 from the past that resembles the current situation?' and renders the answer as chat content for the planner model.
 
-Implementations: planner_loop.ExemplarStore (labelled frames of past episodes, retrieved by visual similarity).
+Implementations: writers.vlm.ExemplarStore (labelled frames of past episodes, retrieved by visual similarity).
 Any other store (text rules keyed by skill, preference profiles, outcome-weighted entries) implements the same
 four methods.
 """

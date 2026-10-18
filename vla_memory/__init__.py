@@ -8,16 +8,21 @@ The top level holds what every memory method shares; each method is a subpackage
   transport.PolicyTransport  the connection to the VLA policy server (openpi websocket protocol, or your own)
   memory.MemoryStore         the long-term memory interface: what from the past resembles the current situation
   env_keys.ControlKeys       the environment's side: the memory/ control keys of every policy call, built from a simulator's
-                             or robot's raw signals (docs/ENVIRONMENT_CONTRACT.md)
+                             or robot's raw signals
   vlm.make_vlm, transport.make_transport   another VLM backend or VLA transport by name: a registered name, an installed
                              entry point or module:Class (the proxies' --vlm-backend and --transport; plugins.py)
 
-Methods (one subpackage each; docs/methods/<method>/README.md):
-  planner_loop               a VLM planner decomposes the instruction into skills, monitors progress at every policy
-                             call with the help of an exemplar store, and hands the policy one skill at a time
-  history_appended           the policy keeps the full instruction and receives a text summary of the completed
-                             skills; an exchangeable writer supplies the events: rules on the robot's own signals from
-                             the task file, the planner loop's VLM monitor, or a simulator's ground truth
+Two layers, chosen with --writer NAME and --method NAME (docs/writers/<name>/README.md, docs/methods/<name>/README.md):
+  writers                    signal that a step of the task is done:
+                               oracle     the simulator's ground truth
+                               rules      rules on the robot's own signals
+                               vlm        a VLM planner with an exemplar store
+  methods                    turn that signal into what the policy receives:
+                               subgoal    the current skill
+                               history    the instruction with the completed skills
+                             other memories plug in as extensions (--with NAME)
+  proxy                      the relay between the environment and the policy server that runs a writer and a method:
+                             python -m vla_memory.proxy
   (RECAP-lite, the parametric method, is a training recipe: docs/methods/recap/README.md)
 """
 from .task import TaskSpec

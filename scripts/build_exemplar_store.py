@@ -15,8 +15,9 @@ from collections import Counter
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from vla_memory import TaskSpec  # noqa: E402
-from vla_memory.planner_loop import ExemplarStore, PhaseLabeller, fingerprint_from_task, load_npz_episodes  # noqa: E402
-from vla_memory.planner_loop.labels import parse_episode_ids  # noqa: E402
+from vla_memory.fingerprint import fingerprint_from_task  # noqa: E402
+from vla_memory.writers.vlm import ExemplarStore, PhaseLabeller, load_npz_episodes  # noqa: E402
+from vla_memory.writers.vlm.labels import parse_episode_ids  # noqa: E402
 
 
 def main():

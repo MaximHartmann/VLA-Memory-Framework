@@ -108,14 +108,14 @@ history:
   joiner: ", "
   suffix: "."
   max_lines: 3              # the longest history in the training data (the last state lists three events)
-  # Rules writer (history_appended.rules): when a line is written, from the robot's own signals. Each verb maps to one
+  # Rules writer (writers/rules): when a line is written, from the robot's own signals. Each verb maps to one
   # trigger of the grasp cycle. The numbers reproduce the moments where the training labels change, the same rules as the
   # simulator's ground-truth tracker: "pick up" once the block is 9 cm up, "place" once the fingertips are 6 cm above or
   # 8 cm away from the set-down block. A block let go less than 8 cm above the grasp point counts as set down.
   rules:
     pick up: {trigger: lift, rise: 0.09}
     place:   {trigger: set_down, release_below: 0.08, up: 0.06, away: 0.08}
-  # Which object a pick concerns (history_appended.identify): plan_order assumes the plan; colour counts each object's colour
+  # Which object a pick concerns (writers/rules/identify.py): plan_order assumes the plan; colour counts each object's colour
   # (fingerprint.colours) in the wrist-image region where a held object appears (rows, cols as fractions; measured on the
   # demonstrations: a held block fills a median 82 % of it, the other block's colour never appears). On 957 recorded picks
   # with a lifted block the colour identifier named every one correctly, including 31 blue-first picks the plan order gets wrong.

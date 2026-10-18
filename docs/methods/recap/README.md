@@ -8,7 +8,7 @@ core of RECAP from π*0.6 (Physical Intelligence, 2025, arXiv 2511.14759): the a
 kept; the human corrections, the value function, the per-transition advantage indicator and the repeated rounds are dropped.
 What remains is filtered behaviour cloning on the agent's own successes, the cheapest member of the family and one that needs
 no new training code, because the successful rollouts simply become demonstrations. At run time nothing changes: the result
-is a drop-in replacement for the policy inside the planner loop.
+is a drop-in replacement for the policy behind any writer and method.
 
 ## Prerequisites
 
@@ -26,8 +26,8 @@ is a drop-in replacement for the policy inside the planner loop.
 3. **Convert** them like demonstrations and **mix** in original demonstrations as replay against drift (40 of 221 episodes).
 4. **Fine-tune** from the parent's weights with the same LoRA settings, a short schedule and a lower learning rate
    (`training/README.md`, "Running a fine-tuning"; the reference run: 5000 steps, 1e-5 to 1e-6, cosine).
-5. **Select** the checkpoint on development seeds and evaluate it like every other policy. It replaces the parent in the
-   planner loop (`--upstream-port` of the new policy server); the proxy, the planner and the store stay the same.
+5. **Select** the checkpoint on development seeds and evaluate it like every other policy. It replaces the parent behind
+   the proxy (`--upstream-port` of the new policy server); the writer, the method and the store stay the same.
 
 The framework's part is the data side; the training itself belongs to the policy's own code base.
 
@@ -35,10 +35,14 @@ The framework's part is the data side; the training itself belongs to the policy
 
 Reference task, 100 fresh seeds, full tasks of 100:
 
-| policy | ground-truth sub-prompts | the planner loop's monitor with a 20-episode store |
+| policy | ground-truth sub-prompts (`--writer oracle`) | the VLM writer with a 20-episode store |
 |---|---|---|
 | parent (sub-goal policy, step 20000) | 92 | 90 |
 | RECAP-lite, one round (step 4999) | 94 | 94 |
+
+Both with the sub-goal method; the VLM writer answered with the object states without a reason (`--no-verdict-only
+--brief`). The parent's 90 was run with an earlier memory-vote gate that also settled questions about the last skill; the
+framework always asks about it.
 
 - One round keeps everything the parent could do and recovers some of its failures (6 of the parent's 8), but adds 4 new
   ones of the same kind: the gripper closing repeatedly beside a cube it had nudged. The differences are within noise

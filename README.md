@@ -14,40 +14,40 @@ bases can be built, exchanged and compared against the same policy, the same tas
 The framework is model-agnostic: the VLA policy, the language or vision-language model, the task and the memory
 method are replaceable components behind small interfaces.
 
-## First approach: the planner loop
+## Two layers: writers and methods
 
-The first method realised in the framework is a planner loop. A proxy sits between the environment and the policy
-server and relays every observation. A vision-language model (VLM) acts as the planner: it decomposes the user's
-instruction once into the skills the policy was trained on, and at every policy call it judges from the camera
-images, the robot's proprioception and retrieved examples of labelled past observations whether the current skill is
-complete. The skills and their completion rules come from a task specification file. The proxy keeps the plan and the
-current step as working memory, a retrieval store of labelled past observations serves as long-term memory, and the
-policy only ever receives the prompt of the current skill.
+A proxy sits between the environment and the VLA policy server and relays every observation. Two exchangeable components
+run in it. A **writer** signals that a step of the task is done: it keeps the plan, the task's skills in order, and a pointer
+that it moves forward when it decides that the current skill is complete. A **method** turns that signal into what the
+policy receives. Every writer drives every method:
 
-## Second approach: the history-appended prompt
+```
+python -m vla_memory.proxy --writer NAME --method NAME --listen-port <port> --upstream-port <policy port>
+```
 
-The second method keeps the memory inside the policy's own input. The instruction stays the full sentence, and a
-short text is appended that lists what has already been done ("History: picked up the red block, placed the red
-block."). A policy fine-tuned on such prompts can tell apart phases that look alike from the cameras. Who writes the
-history is exchangeable: rules on the robot's own gripper and hand signals, declared in the task file and checked offline
-before use; the planner loop's VLM monitor; or a simulator's ground truth for reference runs. On the reference task the
-same policy completes 79 of 100 full tasks with the rules writer, 77 with the VLM monitor and 82 with the ground truth,
-differences within noise, against 11 for the memoryless policy. The rules writer runs in real time and needs no model.
+The environment connects to `<port>` instead of the policy server and otherwise runs unchanged: it sends the full
+instruction as the prompt and its control keys under `memory/` (`vla_memory/env_keys.py` builds them). A writer that decides
+from the call's inputs moves its pointer before the policy call, so the policy's input of the same call shows the decision;
+a writer that decides from the policy's reply shows it from the next call on. The skills, their completion rules and the
+prompt texts come from a task file (`vla_memory/tasks/red_blue_blocks.yaml`).
 
-## Third approach: RECAP-lite, learning from the policy's own rollouts
-
-The third method writes memory into the policy's weights. The policy is run in the simulator, its successful executions are
-kept and turned into training episodes, and the policy is fine-tuned on them mixed with a few original demonstrations. It is the
-filtered-cloning core of RECAP (π*0.6), without the value function, the advantage indicator and the human corrections. The result
-is a drop-in replacement for the policy inside the planner loop; nothing changes at run time. On the reference task one round
-edges past the parent policy (94 against 92 of 100 full tasks), within noise.
-
-## Implemented methods
-
-| method | memory used | status | documentation |
+| writer | who decides that a skill is complete | real robot | page |
 |---|---|---|---|
-| Planner loop with exemplar memory | working memory (plan and current step, held by the proxy); long-term memory (retrieval store of labelled past observations) | implemented and evaluated in simulation | [docs/methods/planner_loop.md](docs/methods/planner_loop/README.md) |
-| History-appended prompt | working memory rendered into the policy's prompt (the completed skills as text), written by rules on the robot's signals from the task file, by the planner loop's VLM monitor, or by a simulator's ground truth | implemented and evaluated in simulation | [docs/methods/history_appended/README.md](docs/methods/history_appended/README.md) |
-| RECAP-lite | parametric long-term memory: the policy's own successful rollouts written into its weights by fine-tuning | implemented and evaluated in simulation | [docs/methods/recap/README.md](docs/methods/recap/README.md) |
+| `oracle` | the simulator's ground truth, the reference | no | [docs/writers/oracle](docs/writers/oracle/README.md) |
+| `rules` | rules on the robot's gripper and hand signals, declared in the task file, and a colour identifier for the object; no model, real time | yes | [docs/writers/rules](docs/writers/rules/README.md) |
+| `vlm` | a vision-language model that plans the skills once and judges completion from the cameras and the proprioception at every call, with a store of labelled past observations | yes | [docs/writers/vlm](docs/writers/vlm/README.md) |
 
-Each further method gets its own page under `docs/methods/` and a row in this table.
+| method | what the policy receives | memory | page |
+|---|---|---|---|
+| `subgoal` | the prompt of the current skill; the policy is trained on the short skills | the writer's plan and pointer, held by the proxy | [docs/methods/subgoal](docs/methods/subgoal/README.md) |
+| `history` | the full instruction with a line per completed skill; the policy is trained on such prompts | the completed skills as text in the policy's input | [docs/methods/history](docs/methods/history/README.md) |
+
+`--writer off` hands the policy the instruction unchanged.
+
+## Other methods
+
+| method | memory used | how it plugs in | page |
+|---|---|---|---|
+| RECAP-lite | parametric long-term memory: the policy's own successful rollouts written into its weights by fine-tuning; one round completes 94 of 100 against 92 for the parent (ground-truth sub-goals), within noise | a new policy behind any writer and method | [docs/methods/recap](docs/methods/recap/README.md) |
+
+Each further writer or method gets its own page under `docs/writers/` or `docs/methods/` and a row in these tables.

@@ -6,6 +6,7 @@ on a writer's signal, base.METHODS their registry; one of them is chosen with --
 
 Other memories plug in with --with NAME (proxy/extensions.py):
     memory_policy                  a store of moments of recorded episodes, the nearest one handed to the policy
+    notebook                       the preference notebook about the user, read by the VLM planner
 """
 from .base import METHODS, Method, register_method, resolve_method
 

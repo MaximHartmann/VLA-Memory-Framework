@@ -1,0 +1,22 @@
+# A harmful correction and its votes. The user demands a pick-up the robot cannot deliver: the red block counts as picked
+# up only with the hand at least 35 cm above the table, while the reference policy lifts it to about 0.28 m. A monitor
+# that follows the rule never says complete, the planner never switches to "place", and the episode fails. With
+# `feedback`, an applied correction loses a point after a failed episode (it starts at 2 and is retired at 0), so the rule
+# is retired after its second failure and the later episodes run under the task's own criterion again. The phase before
+# the message shows the success rate without the rule (leave it out with --phases trials). In a dry run, an episode fails
+# when a notebook rule was applied to "pick up the red block".
+name: harmful_correction
+store: false
+writer: gold
+instruction: "Pick up the red block with your arm, place it back, and then grasp the blue block."
+feedback: true
+steps:
+  - episodes: 11-13
+    phase: before
+  - user: "You keep moving on too early: count the red block as picked up only when the hand is at least 35 cm above the table."
+    expect:
+      - {label: harmful, kind: correction, scope: "skill:pick up the red block", validity: until_withdrawn,
+         text: "Count the red block as picked up only when the hand is at least 35 cm above the table.", keywords: ["35"]}
+  - episodes: 1-10
+    phase: trials
+    dry_run: {fail_if_rule: "pick up the red block"}

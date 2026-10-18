@@ -1,0 +1,25 @@
+# Validity and instruction precedence. "Please only do the red block today." becomes a plan rule that holds for the day.
+# Three phases: the main phase (the instruction names no block: the plan is the red block only), a control (the
+# instruction names both blocks: it has precedence, the planner holds the rule back and plans both blocks), and the next
+# day (the notebook's clock moves to 09:00 of the next day, the rule has ended and the plan has both blocks again). The
+# first clock step puts a fresh notebook at 09:00 of the run's day, so that a run started late does not cross midnight.
+# Following = the exact plan.
+name: validity_and_precedence
+writer: vlm
+instruction: "Pick up each block and put it back on the table."
+steps:
+  - clock: {at: "09:00"}
+  - user: "Please only do the red block today."
+    expect:
+      - {label: only_red, kind: preference, scope: plan, validity: day, text: "Only handle the red block."}
+  - episodes: 1-20
+    phase: only_red
+    expect: {plan: ["pick up the red block", "place the red block"]}
+  - episodes: 1-5
+    phase: control_both_named
+    instruction: "Pick up the red block and put it back, then do the same with the blue block."
+    expect: {plan: ["pick up the red block", "place the red block", "pick up the blue block", "place the blue block"]}
+  - clock: next_day
+  - episodes: 1-5
+    phase: next_day
+    expect: {plan: ["pick up the red block", "place the red block", "pick up the blue block", "place the blue block"]}

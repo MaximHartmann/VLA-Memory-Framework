@@ -43,6 +43,7 @@ from ..plugins import resolve
 # registered name -> class, or its import path "module:Class" (imported only when the name is given with --with)
 EXTENSIONS: dict[str, Any] = {
     "memory_policy": "vla_memory.methods.memory_policy.extension:MemoryPolicyExtension",   # the retrieved moment
+    "notebook": "vla_memory.methods.notebook.extension:NotebookExtension",                  # the preference notebook
 }
 EXTENSION_ENTRY_POINTS = "vla_memory.extensions"
 

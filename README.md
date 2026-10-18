@@ -36,6 +36,7 @@ prompt texts come from a task file (`vla_memory/tasks/red_blue_blocks.yaml`).
 | `oracle` | the simulator's ground truth, the reference | no | [docs/writers/oracle](docs/writers/oracle/README.md) |
 | `rules` | rules on the robot's gripper and hand signals, declared in the task file, and a colour identifier for the object; no model, real time | yes | [docs/writers/rules](docs/writers/rules/README.md) |
 | `vlm` | a vision-language model that plans the skills once and judges completion from the cameras and the proprioception at every call, with a store of labelled past observations | yes | [docs/writers/vlm](docs/writers/vlm/README.md) |
+| `head` | the policy itself: an event head on its internal representation of each call | yes | [docs/writers/head](docs/writers/head/README.md) |
 
 | method | what the policy receives | memory | page |
 |---|---|---|---|
@@ -43,6 +44,21 @@ prompt texts come from a task file (`vla_memory/tasks/red_blue_blocks.yaml`).
 | `history` | the full instruction with a line per completed skill; the policy is trained on such prompts | the completed skills as text in the policy's input | [docs/methods/history](docs/methods/history/README.md) |
 
 `--writer off` hands the policy the instruction unchanged.
+
+### Measured results
+
+Full tasks out of 100 fresh seeds on the reference task: pick up and put back a red and then a blue cube with a Franka arm
+in Isaac Sim; a pi0.5 policy trained for each method; 500 control steps, a policy call every 8 steps. An empty cell: the
+combination is supported but was not measured.
+
+| method \ writer | `oracle` | `rules` | `vlm` | `head` |
+|---|---|---|---|---|
+| `subgoal` | 92 | 94 | 94 | |
+| `history` | 82 | 79 | 77 | 78 |
+
+For each method the writers are within noise of each other; the memoryless policy, trained on the full instruction, completes
+11. The VLM writer ran without a store with the sub-goal method (87 with a store of 20 recorded episodes) and with that store
+with the history method. The pages give the conditions, the timing and what failed.
 
 ## Other methods
 

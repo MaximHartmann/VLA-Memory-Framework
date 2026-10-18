@@ -29,6 +29,7 @@ WRITERS: dict[str, Any] = {
     "off": "vla_memory.writers.oracle:OffWriter",              # no writer: the policy gets the instruction
     "rules": "vla_memory.writers.rules.writer:RulesWriter",    # rules on the robot's gripper and hand signals
     "vlm": "vla_memory.writers.vlm.writer:VlmWriter",          # the VLM planner, with the exemplar store
+    "head": "vla_memory.writers.head.writer:HeadWriter",       # the policy's own event head, from its reply
 }
 WRITER_ENTRY_POINTS = "vla_memory.writers"
 

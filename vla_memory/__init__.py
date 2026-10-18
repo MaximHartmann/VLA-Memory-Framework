@@ -17,6 +17,7 @@ Two layers, chosen with --writer NAME and --method NAME (docs/writers/<name>/REA
                                oracle     the simulator's ground truth
                                rules      rules on the robot's own signals
                                vlm        a VLM planner with an exemplar store
+                               head       the policy's own event head
   methods                    turn that signal into what the policy receives:
                                subgoal    the current skill
                                history    the instruction with the completed skills

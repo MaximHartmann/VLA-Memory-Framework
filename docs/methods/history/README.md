@@ -24,6 +24,7 @@ has completed; who decides that a skill is complete is exchangeable, the policy 
   - `rules`: the robot's signals
   - `vlm`: the planning model
   - `oracle`: the environment's ground truth
+  - `head`: a policy server that returns the policy's event head
 
 ## How to use it in the framework
 
@@ -46,6 +47,7 @@ checkpoint 28000); 100 fresh seeds of 500 control steps, a policy call every 8 s
 | `oracle` | 82 | reference |
 | `rules` | 79 | 6297 of 6300 policy calls |
 | `vlm` | 77 | 94 % of calls |
+| `head` | 78 | the line one call later in 236 of 253 lines |
 | memoryless policy, same instruction, no history | 11 | |
 
 - The writers are within noise of each other; which episode fails is mostly the policy's own grasp, not the memory.

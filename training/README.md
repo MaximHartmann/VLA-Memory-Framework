@@ -11,6 +11,7 @@ data, and our changes to openpi (commit 215abfb). Not needed to run the proxy.
 | `relabel_subgoals.py` | the sub-goal policy's data: each frame's prompt becomes the active skill ("pick up the red block", ...), by waypoint phase |
 | `relabel_history.py` | the history policy's data: each frame's prompt becomes the full instruction plus "History: <events so far>" |
 | `relabel_memory.py` | the memory policy's data: the memory store built from the training datasets, and each frame's retrieved memory (the image column `memory_image`, the prompt "<skill>. memory: <sentence>") |
+| `fit_event_head.py` | the event head of the history policy (`docs/writers/head/README.md`): training rows from recorded rollouts of the policy, their features from the frozen policy, the fit on the CPU |
 | `openpi/openpi_changes.patch` | our changes to openpi: the input and output transforms (`src/openpi/policies/red_blue_policy.py`), the data and training configs (`src/openpi/training/config.py`), a weight guard and optional gradient accumulation in `scripts/train.py`, and the inference-time centre crop (`serve_policy.py --policy.center_crop`) |
 
 ## How to train

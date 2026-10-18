@@ -6,6 +6,7 @@ Writers (--writer):
     oracle     the simulator's ground truth (memory/oracle_prompt)
     rules      rules on the robot's gripper and hand signals (the task file's history.rules)
     vlm        the VLM planner, with the exemplar store (default)
+    head       the policy's own event head (a policy server that returns its verdict)
     off        none: the policy gets the instruction
 Methods (--method):
     subgoal    the current skill as the prompt (default)

@@ -81,9 +81,9 @@ class FrameLabel:
 
 
 # ------------------------------------------------------------------------------------------------------- the store
-def call_moments(n_frames: int) -> list[int]:
+def call_moments(frame_count: int) -> list[int]:
     """The policy-call moments of an episode: every HORIZON-th frame from 0 that has HORIZON actions after it."""
-    return [step for step in range(0, n_frames, HORIZON) if step + HORIZON <= n_frames]
+    return [step for step in range(0, frame_count, HORIZON) if step + HORIZON <= frame_count]
 
 
 def store_entry(episode: Episode, step: int, skills: Sequence[str]) -> dict:

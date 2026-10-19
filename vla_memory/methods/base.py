@@ -45,14 +45,14 @@ class Method:
     def __init__(self, task):
         self.task = task
 
-    def start_episode(self, episode: str, ctrl: dict) -> None:
-        """A new episode begins."""
+    def start_episode(self, episode: str, control_keys: dict) -> None:
+        """A new episode begins; control_keys: the memory/ keys of its first call, without the prefix."""
 
     def prompt(self, instruction: str, writer) -> str:
         """The prompt of this call, from the instruction and the writer's state."""
         raise NotImplementedError
 
-    def before_policy(self, obs: dict, ctrl: dict, writer) -> dict:
+    def before_policy(self, observation: dict, control_keys: dict, writer) -> dict:
         """Every call, after the prompt is set: may add keys to the observation. Returns fields for the proxy's log."""
         return {}
 

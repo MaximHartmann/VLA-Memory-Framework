@@ -17,10 +17,14 @@ from .prompt import HistoryPrompt
 
 
 class HistoryMethod(Method):
+    """The instruction with the writer's completed skills appended (prompt.HistoryPrompt): at most max_lines of them, and
+    with delay_calls the history of that many calls ago."""
+
     name = "history"
 
     @classmethod
     def add_arguments(cls, parser):
+        """--max-lines and --delay-calls."""
         group = parser.add_argument_group("the history-appended prompt (--method history)")
         group.add_argument("--max-lines", type=int, default=None,
                            help="show at most N history lines (default: history.max_lines of the task file)")
@@ -29,6 +33,7 @@ class HistoryMethod(Method):
 
     @classmethod
     def build(cls, args, task):
+        """The method with the two options."""
         return cls(task, max_lines=args.max_lines, delay_calls=args.delay_calls)
 
     def __init__(self, task, max_lines: int | None = None, delay_calls: int = 0):
@@ -38,26 +43,28 @@ class HistoryMethod(Method):
         self.delay_calls = max(0, int(delay_calls))
         self._shown: deque = deque()       # the histories of the last calls, for --delay-calls
 
-    def start_episode(self, episode: str, ctrl: dict) -> None:
+    def start_episode(self, episode: str, control_keys: dict) -> None:
+        """Forget the histories shown in the last episode."""
         self._shown = deque()
 
     def prompt(self, instruction: str, writer) -> str:
+        """The instruction with the writer's completed skills; an environment prompt that is not a skill is forwarded."""
         if writer.passthrough is not None:
             return writer.passthrough      # the environment already sent a full prompt
         return self.render(instruction, writer.completed())
 
-    def render(self, instruction: str, done_skills) -> str:
+    def render(self, instruction: str, completed_skills) -> str:
         """Instruction plus history, at most max_lines lines (the longest history the policy was trained on)."""
-        done = list(done_skills)
+        completed = list(completed_skills)
         if self.delay_calls:
-            done = self._delayed(done)
+            completed = self._delayed(completed)
         if self.max_lines is not None:
-            done = done[:self.max_lines]
-        return self.history.render(instruction, done)
+            completed = completed[:self.max_lines]
+        return self.history.render(instruction, completed)
 
-    def _delayed(self, done: list) -> list:
+    def _delayed(self, completed: list) -> list:
         """The history of delay_calls calls ago (render is called once per policy call)."""
-        self._shown.append(done)
+        self._shown.append(completed)
         while len(self._shown) > self.delay_calls + 1:
             self._shown.popleft()
         return self._shown[0]

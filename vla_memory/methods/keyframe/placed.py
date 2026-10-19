@@ -44,17 +44,19 @@ class PlacedLater:
         self.reset()
 
     def reset(self) -> None:
+        """No placing event is waiting (a new episode, or its keyframe was taken)."""
         self.pending = None       # the placing event was signalled, its keyframe not taken yet: {"signal_step", "calls"}
 
     def config(self) -> dict:
+        """The event, the height and the latest call, for the metadata."""
         return {"event": self.event, "height": self.height, "calls": self.calls}
 
-    def fingertip_height(self, obs: dict) -> float | None:
+    def fingertip_height(self, observation: dict) -> float | None:
         """The fingertips' height above a resting cube (m), from the call's joint state; None without a usable one."""
         joints = None
         for key in STATE_KEYS:
-            if obs.get(key) is not None:
-                joints = np.asarray(obs[key], float).reshape(-1)
+            if observation.get(key) is not None:
+                joints = np.asarray(observation[key], float).reshape(-1)
                 break
         if joints is None or joints.size < 7 or not np.all(np.isfinite(joints[:7])):
             return None

@@ -10,7 +10,7 @@ was made in (`validity`; `expires` is the end of that day for both).
 from __future__ import annotations
 
 import dataclasses
-import datetime as _dt
+import datetime
 import re
 
 STRICTNESS_PRESETS = {                        # named parameter bundles a writer can attach to a planner-scope entry
@@ -19,32 +19,35 @@ STRICTNESS_PRESETS = {                        # named parameter bundles a writer
     "default": {"votes_to_advance": 1, "min_calls_per_skill": 2, "call_every": 1},
 }
 VALIDITY = ("until_withdrawn", "day", "session")          # how long an entry holds, longest first
-SPAN = {name: i for i, name in enumerate(reversed(VALIDITY))}   # session 0 < day 1 < until_withdrawn 2
+SPAN = {name: rank for rank, name in enumerate(reversed(VALIDITY))}   # session 0 < day 1 < until_withdrawn 2
 
 
 def now_stamp() -> str:
     """The wall clock to the microsecond: ties in "newest first" must not happen within a second."""
-    return _dt.datetime.now().isoformat(timespec="microseconds")
+    return datetime.datetime.now().isoformat(timespec="microseconds")
 
 
-def day_end(t: _dt.datetime) -> str:
-    """Midnight after t: the end of the day a 'day' or 'session' entry was made in (a session never outlasts its day)."""
-    midnight = _dt.datetime.combine(t.date(), _dt.time()) + _dt.timedelta(days=1)
+def day_end(moment: datetime.datetime) -> str:
+    """Midnight after the moment: the end of the day a 'day' or 'session' entry was made in (a session never outlasts its
+    day)."""
+    midnight = datetime.datetime.combine(moment.date(), datetime.time()) + datetime.timedelta(days=1)
     return midnight.isoformat(timespec="microseconds")
 
 
 def named(text: str, objects) -> list[str]:
     """The task objects a text names (whole words, any case, plural too), in the order of their first mention."""
     hits = []
-    for obj in objects:
-        match = re.search(rf"\b{re.escape(obj)}(?:e?s)?\b", text or "", re.I)
+    for object_name in objects:
+        match = re.search(rf"\b{re.escape(object_name)}(?:e?s)?\b", text or "", re.I)
         if match:
-            hits.append((match.start(), obj))
-    return [obj for _, obj in sorted(hits)]
+            hits.append((match.start(), object_name))
+    return [object_name for _, object_name in sorted(hits)]
 
 
 @dataclasses.dataclass
 class Entry:
+    """One rule of the notebook (module docstring), as the notebook file stores it."""
+
     id: str
     kind: str                      # "preference" | "correction"
     scope: str                     # "plan" | "skill:<skill string>" | "planner"
@@ -63,12 +66,15 @@ class Entry:
 
     @property
     def active(self) -> bool:
+        """Neither superseded nor retired."""
         return self.valid_to is None
 
     def to_dict(self) -> dict:
+        """The entry as the notebook file stores it."""
         return dataclasses.asdict(self)
 
     @classmethod
-    def from_dict(cls, d: dict) -> "Entry":
-        names = {f.name for f in dataclasses.fields(cls)}
-        return cls(**{k: v for k, v in d.items() if k in names})
+    def from_dict(cls, data: dict) -> "Entry":
+        """An entry from the notebook file; keys the dataclass does not know are ignored."""
+        names = {field.name for field in dataclasses.fields(cls)}
+        return cls(**{key: value for key, value in data.items() if key in names})

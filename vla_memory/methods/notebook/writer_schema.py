@@ -28,7 +28,7 @@ DISTIL_FIELDS = ("step", "scope", "text", "condition", "params")   # a correctio
 
 def scopes(task) -> list[str]:
     """Where an entry can act: the plan, the planner's parameters, or the completion rule of one of the task's skills."""
-    return ["plan", "planner"] + [f"skill:{s}" for s in task.skills]
+    return ["plan", "planner"] + [f"skill:{skill}" for skill in task.skills]
 
 
 def field_schemas(task, presets) -> dict:
@@ -47,7 +47,7 @@ def entry_schema(task, max_items: int = 3, presets=STRICTNESS_PRESETS, distil: b
     validity (always a correction, held until withdrawn)."""
     fields = field_schemas(task, presets)
     order = DISTIL_FIELDS if distil else EXTRACT_FIELDS
-    item = {"type": "object", "properties": {k: fields[k] for k in order}, "required": list(order),
+    item = {"type": "object", "properties": {name: fields[name] for name in order}, "required": list(order),
             "additionalProperties": False}
     entries = {"type": "array", "items": item, "maxItems": max_items}
     return {"type": "object", "properties": {"entries": entries}, "required": ["entries"], "additionalProperties": False}
@@ -62,6 +62,7 @@ def answer_entries(answer) -> list[dict]:
 
 
 def merge_schema(ids, ops=OPS) -> dict:
+    """The merge's answer: one of the operations, and one of the candidate ids or "none"."""
     return {"type": "object",
             "properties": {"op": {"type": "string", "enum": list(ops)}, "id": {"type": "string", "enum": [*ids, "none"]}},
             "required": ["op", "id"], "additionalProperties": False}
@@ -69,8 +70,8 @@ def merge_schema(ids, ops=OPS) -> dict:
 
 def vocabulary(task, presets: dict) -> str:
     """The skills, the scopes and the presets in words."""
-    skills = "; ".join(f'"{s}"' for s in task.skills)
-    notes = "; ".join(f"{k}: {PRESET_NOTES.get(k, json.dumps(v))}" for k, v in presets.items())
+    skills = "; ".join(f'"{skill}"' for skill in task.skills)
+    notes = "; ".join(f"{name}: {PRESET_NOTES.get(name, json.dumps(params))}" for name, params in presets.items())
     return (f"The robot knows exactly these skills: {skills}. For every instruction a planner puts them in order, and a "
             "monitor decides when the current skill is complete. Scopes: plan = which skills to do and in which order; "
             "skill:<skill> = an extra condition for when that skill counts as complete; planner = how carefully "
@@ -79,12 +80,12 @@ def vocabulary(task, presets: dict) -> str:
 
 def show(text: str, condition: str, params: dict, validity: str, presets: dict) -> str:
     """One rule as the merge shows it: its text, its condition, its preset by name, and a time limit."""
-    out = text
+    shown = text
     if condition:
-        out += f" ({condition})"
+        shown += f" ({condition})"
     if params:
-        preset = next((k for k, v in presets.items() if v == params), json.dumps(params))
-        out += f" [preset {preset}]"
+        preset = next((name for name, preset_params in presets.items() if preset_params == params), json.dumps(params))
+        shown += f" [preset {preset}]"
     if validity in VALIDITY_NOTES:
-        out += f" [{VALIDITY_NOTES[validity]}]"
-    return out
+        shown += f" [{VALIDITY_NOTES[validity]}]"
+    return shown

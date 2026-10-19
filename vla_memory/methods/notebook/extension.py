@@ -17,10 +17,14 @@ log = logging.getLogger("vla_memory.methods.notebook")
 
 
 class NotebookExtension(Extension):
+    """The notebook in the planner loop: its rules in the plan request and the questions, its parameters as overrides.
+    store None: the notebook is switched off (--profile-off)."""
+
     name = "notebook"
 
     @classmethod
     def add_arguments(cls, parser):
+        """--profile and --profile-off."""
         group = parser.add_argument_group("the preference notebook about the user (--with notebook)")
         group.add_argument("--profile", default=None, help="user preference memory (notebook), a JSON file")
         group.add_argument("--profile-off", action="store_true",
@@ -28,6 +32,7 @@ class NotebookExtension(Extension):
 
     @classmethod
     def build(cls, args, task, built):
+        """The extension with the notebook of --profile; it needs the VLM writer, which reads the notebook."""
         if args.writer != "vlm":
             raise ValueError("the notebook is read by the VLM planner: it needs --writer vlm")
         if not args.profile:
@@ -53,6 +58,8 @@ class NotebookExtension(Extension):
         return dict(self._overrides)
 
     def plan_request(self, instruction):
+        """The plan rules for this instruction as text, and the record fields: the rules applied, held back and the
+        parameters in force."""
         if self.store is None:
             return "", {}
         plan_rules, held = self.store.plan_rules_for(instruction, self.task.objects)
@@ -66,6 +73,7 @@ class NotebookExtension(Extension):
         return self.store.plan_text(plan_rules), fields
 
     def criterion_text(self, skill):
+        """The skill's rules after its completion criterion, and their ids for the record."""
         if self.store is None:
             return "", {}
         rules = self.store.rules_for_skill(skill)
@@ -75,4 +83,5 @@ class NotebookExtension(Extension):
         return "\n" + self.store.rules_text(rules), {"profile_rules": [entry.id for entry in rules]}
 
     def metadata(self):
+        """The notebook file under "profile"."""
         return {"profile": self.path}

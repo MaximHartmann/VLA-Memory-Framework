@@ -16,55 +16,61 @@ DEFAULTS = {"kind": "preference", "validity": "until_withdrawn", "condition": ""
 
 
 class GoldWriter(PreferenceWriter):
+    """The PreferenceWriter with every model question answered from the annotations of the current step."""
+
     DISTIL_MAX = None
 
-    def __init__(self, task, store: ProfileStore, **kw):
-        super().__init__(None, task, store, **kw)
+    def __init__(self, task, store: ProfileStore, **options):
+        super().__init__(None, task, store, **options)
         self.ids: dict[str, str] = {}      # label -> entry id
         self._gold: list[dict] = []        # the annotated items of the current question
 
-    def _ask(self, name, system, user, schema, max_tokens, ctx=None):
-        ctx = ctx or {}
+    def _ask(self, name, system, user, schema, max_tokens, context=None):
+        """The annotation's answer to the question `name`; the call record notes it as gold."""
+        context = context or {}
         if name == "merge":
-            ans = self._merge_answer_from(ctx["proposal"], ctx["candidates"])
+            answer = self._merge_answer_from(context["proposal"], context["candidates"])
         else:
-            ans = self._entries_answer_from(ctx.get("gold"), schema)
-        rec = {"name": name, "answer": ans, "ms": 0.0, "gold": True}
+            answer = self._entries_answer_from(context.get("gold"), schema)
+        record = {"name": name, "answer": answer, "ms": 0.0, "gold": True}
         if self.keep_prompts:
-            rec["prompt"] = [system, user]
-        self.calls.append(rec)
-        return ans
+            record["prompt"] = [system, user]
+        self.calls.append(record)
+        return answer
 
     def _merge_answer_from(self, proposal: dict, candidates: list) -> dict:
         """The merge operation the annotation implies; the same annotated rule again (e.g. a correction) is a NOOP."""
-        g = self._match(proposal)
-        ids = [e.id for e in candidates]
-        key = next((k for k in ("replaces", "revokes", "repeats") if g.get(k)), None)
-        i = self.ids.get(g[key]) if key else None
-        same = next((e.id for e in candidates if e.text == proposal["text"]), None)
-        if i in ids:
-            return {"op": MERGE_OPS[key], "id": i}
-        if same and not key:
+        annotation = self._match(proposal)
+        ids = [entry.id for entry in candidates]
+        relation = next((name for name in ("replaces", "revokes", "repeats") if annotation.get(name)), None)
+        target = self.ids.get(annotation[relation]) if relation else None
+        same = next((entry.id for entry in candidates if entry.text == proposal["text"]), None)
+        if target in ids:
+            return {"op": MERGE_OPS[relation], "id": target}
+        if same and not relation:
             return {"op": "NOOP", "id": same}
-        return {"op": "NOOP" if key == "revokes" else "ADD", "id": "none"}
+        return {"op": "NOOP" if relation == "revokes" else "ADD", "id": "none"}
 
     def _entries_answer_from(self, gold, schema: dict) -> dict:
         """The annotated items as the answer of an extraction or a distillation; an item that revokes is a withdrawal."""
-        self._gold = [dict(g) for g in gold or []]
+        self._gold = [dict(annotation) for annotation in gold or []]
         fields = schema["properties"]["entries"]["items"]["properties"]
         items = []
-        for g in self._gold:
-            given = {k: v for k, v in g.items() if v is not None}
-            items.append({**DEFAULTS, **given, **({"kind": WITHDRAWAL} if g.get("revokes") else {})})
-        return {"entries": [{k: it.get(k) for k in fields} for it in items]}
+        for annotation in self._gold:
+            given = {name: value for name, value in annotation.items() if value is not None}
+            items.append({**DEFAULTS, **given, **({"kind": WITHDRAWAL} if annotation.get("revokes") else {})})
+        return {"entries": [{name: item.get(name) for name in fields} for item in items]}
 
-    def merge(self, p: dict) -> dict:
-        rec = super().merge(p)
-        g = self._match(p)
-        if rec["entry"] and g.get("label"):
-            self.ids[g["label"]] = rec["entry"]
-        return rec
+    def merge(self, proposal: dict) -> dict:
+        """The merge of the PreferenceWriter; a stored entry is remembered under its annotation's label."""
+        record = super().merge(proposal)
+        annotation = self._match(proposal)
+        if record["entry"] and annotation.get("label"):
+            self.ids[annotation["label"]] = record["entry"]
+        return record
 
-    def _match(self, p: dict) -> dict:
-        same = (g for g in self._gold if g.get("scope") == p["scope"] and str(g.get("text", "")).strip() == p["text"])
+    def _match(self, proposal: dict) -> dict:
+        """The annotated item with the proposal's scope and text, or {}."""
+        same = (annotation for annotation in self._gold
+                if annotation.get("scope") == proposal["scope"] and str(annotation.get("text", "")).strip() == proposal["text"])
         return next(same, {})

@@ -47,6 +47,7 @@ import dataclasses
 import json
 import pathlib
 
+from ...task import TaskSpec, read_task_file
 from .session_schedule import CLOCK_STEPS, CONDITIONS, Episode, clock_spec, parse_seeds, schedule
 from .session_score import applied_entries, applied_ids, brief, check, score_writer, summarise
 
@@ -57,6 +58,8 @@ __all__ = ["CONDITIONS", "CLOCK_STEPS", "Episode", "Outcome", "EpisodeRunner", "
 
 @dataclasses.dataclass
 class Outcome:
+    """How one episode ended, as a runner reports it."""
+
     success: bool
     reason: str = ""
     records: list = dataclasses.field(default_factory=list)   # the planner's records of this episode (plan + monitor)
@@ -67,14 +70,16 @@ class EpisodeRunner:
     """Runs a block of episodes in order; the planner reads the notebook at `profile` (None: no notebook)."""
 
     def run(self, episodes: list[Episode], profile: str | None) -> list[Outcome]:
+        """One outcome per episode, in order."""
         raise NotImplementedError
 
 
 # ---------------------------------------------------------------------- the session file
 def load_session(path) -> dict:
-    p = pathlib.Path(path)
-    text = p.read_text()
-    if p.suffix.lower() in (".yaml", ".yml"):
+    """The session file as a dict: YAML or JSON, by file suffix."""
+    path = pathlib.Path(path)
+    text = path.read_text()
+    if path.suffix.lower() in (".yaml", ".yml"):
         import yaml
         return yaml.safe_load(text)
     return json.loads(text)
@@ -84,26 +89,24 @@ def session_task(session: dict):
     """The session's task: its task file (default: the packaged reference task) with `task_override` merged in, one level
     deep (criteria: {"pick up": ...} replaces that verb's rule only). Returns the TaskSpec and the merged dict, which a
     runner can write to a file for the planner."""
-    from ...task import _HERE, TaskSpec, _load_file
-    d = _load_file(session.get("task") or _HERE / "tasks" / "red_blue_blocks.yaml")
-    for k, v in (session.get("task_override") or {}).items():
-        d[k] = {**d[k], **v} if isinstance(v, dict) and isinstance(d.get(k), dict) else v
-    known = {f.name for f in dataclasses.fields(TaskSpec)}
-    return TaskSpec(**{k: v for k, v in d.items() if k in known}), d
+    data = read_task_file(session.get("task") or TaskSpec.packaged_path("red_blue_blocks"))
+    for key, value in (session.get("task_override") or {}).items():
+        data[key] = {**data[key], **value} if isinstance(value, dict) and isinstance(data.get(key), dict) else value
+    return TaskSpec.from_dict(data), data
 
 
-
-def apply_clock(store, v) -> dict:
+def apply_clock(store, value) -> dict:
     """Carry out a clock step on the notebook; returns the new time and the entries it ended or brought back."""
-    c = clock_spec(v)
-    before = [e.id for e in store.reload().active()]
-    if c["days"] or c.get("at"):
-        store.move_clock(c["days"], c.get("at"))
-    if c["session"]:
+    clock = clock_spec(value)
+    before = [entry.id for entry in store.reload().active()]
+    if clock["days"] or clock.get("at"):
+        store.move_clock(clock["days"], clock.get("at"))
+    if clock["session"]:
         store.new_session()
-    after = [e.id for e in store.reload().active()]
-    return {"now": store.as_of, "session_start": store.session_start, "ended": [i for i in before if i not in after],
-            "resumed": [i for i in after if i not in before]}
+    after = [entry.id for entry in store.reload().active()]
+    return {"now": store.as_of, "session_start": store.session_start,
+            "ended": [entry_id for entry_id in before if entry_id not in after],
+            "resumed": [entry_id for entry_id in after if entry_id not in before]}
 
 
 # ---------------------------------------------------------------------- running a session
@@ -116,8 +119,8 @@ class SessionRun:
         self.runner = runner
         self.writer = writer
         self.store = store
-        self.use = condition == "profile"
-        if self.use and (store is None or store.path is None or writer is None):
+        self.uses_notebook = condition == "profile"
+        if self.uses_notebook and (store is None or store.path is None or writer is None):
             raise ValueError("the profile condition needs a writer and a file-backed ProfileStore (the planner re-reads the "
                              "file)")
         self.distil = session.get("distil", False)
@@ -127,65 +130,70 @@ class SessionRun:
         self.complained: set[int] = set()
         self.file = open(log, "w") if log else None
         self.emit({"event": "session", "name": session.get("name"), "condition": condition, "distil": self.distil,
-                   "feedback": self.vote, "profile": str(store.path) if self.use else None})
+                   "feedback": self.vote, "profile": str(store.path) if self.uses_notebook else None})
 
     def emit(self, record: dict) -> None:
+        """Keep the record and append it to the log file."""
         self.records.append(record)
         if self.file:
             self.file.write(json.dumps(record, default=str) + "\n")
             self.file.flush()
 
     def clock(self, step: dict) -> None:
+        """A clock step: moved on the notebook in the profile condition, recorded in every condition."""
         record = {"event": "clock", "clock": step["clock"]}
-        if self.use:
+        if self.uses_notebook:
             record.update(apply_clock(self.store, step["clock"]))
         self.emit(record)
 
     def message(self, step: dict) -> None:
+        """A user message: written into the notebook in the profile condition, recorded in every condition."""
         record = {"event": "message", "text": step["user"], "expect": step.get("expect")}
-        if self.use:
+        if self.uses_notebook:
             record.update(self.writer.from_message(step["user"], gold=step.get("expect")))
         self.emit(record)
 
     def episodes(self, block: list[Episode]) -> None:
         """Run one block; per episode its record, then the votes and the distillation of the profile condition."""
         active, planner_ids = [], []
-        if self.use:
+        if self.uses_notebook:
             self.store.reload()
-            active = [brief(e) for e in self.store.active()]
-            planner_ids = [e.id for e in self.store.planner_rules()]
-        outcomes = self.runner.run(block, str(self.store.path) if self.use else None)
-        for ep, oc in zip(block, outcomes):
-            applied = applied_entries(oc.records, planner_ids)
-            self.emit(self.episode_record(ep, oc, active, applied))
-            if self.use:
-                self.learn(ep, oc, applied)
+            active = [brief(entry) for entry in self.store.active()]
+            planner_ids = [entry.id for entry in self.store.planner_rules()]
+        outcomes = self.runner.run(block, str(self.store.path) if self.uses_notebook else None)
+        for episode, outcome in zip(block, outcomes):
+            applied = applied_entries(outcome.records, planner_ids)
+            self.emit(self.episode_record(episode, outcome, active, applied))
+            if self.uses_notebook:
+                self.learn(episode, outcome, applied)
 
     @staticmethod
-    def episode_record(ep: Episode, oc: Outcome, active: list, applied: dict) -> dict:
-        plan_rec = next((r for r in oc.records if r.get("event") == "plan"), {})
-        held = [h["id"] for h in plan_rec.get("profile_plan_held") or []]
-        following = check(ep.expect, plan_rec.get("plan") or [], applied["params"])
-        return {"event": "episode", "index": ep.index, "seed": ep.seed, "phase": ep.phase, "instruction": ep.instruction,
-                "success": oc.success, "reason": oc.reason, "plan": plan_rec.get("plan"),
-                "plan_source": plan_rec.get("source"), "active": active, "applied": applied, "held": held,
-                "check": following, **oc.info}
+    def episode_record(episode: Episode, outcome: Outcome, active: list, applied: dict) -> dict:
+        """The record of one episode: the plan, the entries active and applied, the held-back rules and the check."""
+        plan_record = next((record for record in outcome.records if record.get("event") == "plan"), {})
+        held = [item["id"] for item in plan_record.get("profile_plan_held") or []]
+        following = check(episode.expect, plan_record.get("plan") or [], applied["params"])
+        return {"event": "episode", "index": episode.index, "seed": episode.seed, "phase": episode.phase,
+                "instruction": episode.instruction, "success": outcome.success, "reason": outcome.reason,
+                "plan": plan_record.get("plan"), "plan_source": plan_record.get("source"), "active": active,
+                "applied": applied, "held": held, "check": following, **outcome.info}
 
-    def learn(self, ep: Episode, oc: Outcome, applied: dict) -> None:
+    def learn(self, episode: Episode, outcome: Outcome, applied: dict) -> None:
         """After one episode of the profile condition: the votes, and a correction after a failure."""
         if self.vote:
-            fb = self.writer.feedback(applied_ids(applied), oc.success, kinds=self.vote_kinds)
-            if any(fb.values()):
-                self.emit({"event": "feedback", "episode": ep.index, "success": oc.success, **fb})
-        remark = ep.complaint if ep.complaint and ep.step not in self.complained else ""
-        if not oc.success and (self.distil is True or (self.distil == "complaint" and remark)):
+            votes = self.writer.feedback(applied_ids(applied), outcome.success, kinds=self.vote_kinds)
+            if any(votes.values()):
+                self.emit({"event": "feedback", "episode": episode.index, "success": outcome.success, **votes})
+        remark = episode.complaint if episode.complaint and episode.step not in self.complained else ""
+        if not outcome.success and (self.distil is True or (self.distil == "complaint" and remark)):
             if remark:
-                self.complained.add(ep.step)
-            done = self.writer.from_failure(oc.records, oc.reason, remark, gold=ep.correction)
-            self.emit({"event": "distil", "episode": ep.index, "complaint": remark, "expect": ep.correction, **done})
+                self.complained.add(episode.step)
+            done = self.writer.from_failure(outcome.records, outcome.reason, remark, gold=episode.correction)
+            self.emit({"event": "distil", "episode": episode.index, "complaint": remark, "expect": episode.correction, **done})
 
     def finish(self) -> dict:
-        summary = summarise(self.records, self.store if self.use else None)
+        """The summary record, written last; the log file is closed."""
+        summary = summarise(self.records, self.store if self.uses_notebook else None)
         self.emit(summary)
         if self.file:
             self.file.close()

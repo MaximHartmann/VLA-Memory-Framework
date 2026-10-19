@@ -10,7 +10,10 @@ from .base import Method
 
 
 class SubgoalMethod(Method):
+    """The writer's current skill is the prompt."""
+
     name = "subgoal"
 
     def prompt(self, instruction: str, writer) -> str:
+        """The skill the writer's pointer is on."""
         return writer.current_skill

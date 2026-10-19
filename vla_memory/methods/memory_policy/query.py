@@ -7,7 +7,7 @@
     skill          the prompt the proxy decided, when it is one of the task's skills (rules, oracle and vlm mode); else
                    the monitor's current skill (a method's proxy that renders a longer prompt)
 
-The proxy hands the extension the control keys without their memory/ prefix (ctrl).
+The proxy hands the extension the control keys without their memory/ prefix.
 """
 from __future__ import annotations
 
@@ -20,24 +20,24 @@ from ...env_keys import PROPRIO_COLUMNS
 WIDTH_COLUMN = PROPRIO_COLUMNS.index("finger_width")
 
 
-def wrist_frame(obs: dict, ctrl: dict, fallback_key: str | None) -> tuple:
+def wrist_frame(observation: dict, control_keys: dict, fallback_key: str | None) -> tuple:
     """(frame or None, whether the fallback was used): memory/wrist_raw, else the policy's image under fallback_key."""
-    frame = ctrl.get("wrist_raw")
+    frame = control_keys.get("wrist_raw")
     if frame is not None:
         return np.asarray(frame), False
-    if fallback_key is not None and obs.get(fallback_key) is not None:
-        return np.asarray(obs[fallback_key]), True
+    if fallback_key is not None and observation.get(fallback_key) is not None:
+        return np.asarray(observation[fallback_key]), True
     return None, False
 
 
-def finger_width(ctrl: dict) -> float | None:
+def finger_width(control_keys: dict) -> float | None:
     """The measured finger width (m) at this call; None when it is not sent or NaN."""
-    steps = ctrl.get("proprio_steps")
+    steps = control_keys.get("proprio_steps")
     if steps is not None and np.size(steps):
         rows = np.asarray(steps, float).reshape(-1, len(PROPRIO_COLUMNS))
         width = float(rows[-1, WIDTH_COLUMN])
-    elif ctrl.get("finger_width") is not None:
-        width = float(ctrl["finger_width"])
+    elif control_keys.get("finger_width") is not None:
+        width = float(control_keys["finger_width"])
     else:
         return None
     if math.isnan(width):

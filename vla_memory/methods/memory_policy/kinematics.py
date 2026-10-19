@@ -34,9 +34,9 @@ BENCH_BASE_POS = (-0.4, -0.65, 0.75)              # m: the arm's base in the ben
 BENCH_BASE_QUAT = (0.70711, 0.0, 0.0, 0.70711)    # (w, x, y, z): turned +90 degrees about z
 
 
-def rpy_matrix(rpy) -> np.ndarray:
+def rpy_matrix(roll_pitch_yaw) -> np.ndarray:
     """The rotation of URDF roll, pitch and yaw (fixed axes x, y, z): Rz(yaw) Ry(pitch) Rx(roll)."""
-    roll, pitch, yaw = (float(angle) for angle in rpy)
+    roll, pitch, yaw = (float(angle) for angle in roll_pitch_yaw)
     cr, sr = math.cos(roll), math.sin(roll)
     cp, sp = math.cos(pitch), math.sin(pitch)
     cy, sy = math.cos(yaw), math.sin(yaw)
@@ -45,11 +45,11 @@ def rpy_matrix(rpy) -> np.ndarray:
                      [-sp, cp * sr, cp * cr]])
 
 
-def quaternion_matrix(quat) -> np.ndarray:
+def quaternion_matrix(quaternion) -> np.ndarray:
     """The rotation of a quaternion (w, x, y, z), normalised first."""
-    q = np.asarray(quat, float)
-    q = q / np.linalg.norm(q, axis=-1, keepdims=True)
-    w, x, y, z = q
+    quaternion = np.asarray(quaternion, float)
+    quaternion = quaternion / np.linalg.norm(quaternion, axis=-1, keepdims=True)
+    w, x, y, z = quaternion
     return np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
                      [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
                      [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]])
@@ -57,41 +57,41 @@ def quaternion_matrix(quat) -> np.ndarray:
 
 def transform(xyz, rotation) -> np.ndarray:
     """The 4 x 4 homogeneous transform of a translation (m) and a rotation matrix."""
-    out = np.eye(4)
-    out[:3, :3] = rotation
-    out[:3, 3] = xyz
-    return out
+    matrix = np.eye(4)
+    matrix[:3, :3] = rotation
+    matrix[:3, 3] = xyz
+    return matrix
 
 
 def z_turn(cos: float, sin: float) -> np.ndarray:
     """The 4 x 4 rotation about z by the angle with this cosine and sine (a revolute joint)."""
-    out = np.eye(4)
-    out[0, 0] = cos
-    out[0, 1] = -sin
-    out[1, 0] = sin
-    out[1, 1] = cos
-    return out
+    matrix = np.eye(4)
+    matrix[0, 0] = cos
+    matrix[0, 1] = -sin
+    matrix[1, 0] = sin
+    matrix[1, 1] = cos
+    return matrix
 
 
 class FrankaKinematics:
     """The TCP position (m, world) for the joint angles (rad) of a serial arm, by default the Franka arm of the bench.
 
-    joints: the origin (xyz, rpy) of every joint; tool: the fixed frames after the last joint; base_pos, base_quat: the base
-    in the world (position, quaternion w, x, y, z)."""
+    joints: the origin (xyz, roll-pitch-yaw) of every joint; tool: the fixed frames after the last joint; base_pos,
+    base_quat: the base in the world (position, quaternion w, x, y, z)."""
 
     def __init__(self, joints=FER_JOINTS, tool=FER_TOOL, base_pos=BENCH_BASE_POS, base_quat=BENCH_BASE_QUAT):
-        self.origins = [transform(xyz, rpy_matrix(rpy)) for xyz, rpy in joints]
+        self.origins = [transform(xyz, rpy_matrix(roll_pitch_yaw)) for xyz, roll_pitch_yaw in joints]
         self.tool = np.eye(4)
-        for xyz, rpy in tool:
-            self.tool = self.tool @ transform(xyz, rpy_matrix(rpy))
+        for xyz, roll_pitch_yaw in tool:
+            self.tool = self.tool @ transform(xyz, rpy_matrix(roll_pitch_yaw))
         self.base = transform(base_pos, quaternion_matrix(base_quat))
 
     def tcp_position(self, joints) -> np.ndarray:
         """(3,): the TCP position of one configuration (one angle per joint, rad)."""
-        q = np.asarray(joints, float)
-        if q.shape != (len(self.origins),):
-            raise ValueError(f"{len(self.origins)} joint angles expected, got shape {q.shape}")
+        angles = np.asarray(joints, float)
+        if angles.shape != (len(self.origins),):
+            raise ValueError(f"{len(self.origins)} joint angles expected, got shape {angles.shape}")
         pose = self.base
-        for origin, cos, sin in zip(self.origins, np.cos(q), np.sin(q)):
+        for origin, cos, sin in zip(self.origins, np.cos(angles), np.sin(angles)):
             pose = pose @ origin @ z_turn(cos, sin)
         return (pose @ self.tool)[:3, 3]

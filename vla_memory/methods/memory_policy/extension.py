@@ -41,11 +41,15 @@ DEFAULT_WRIST_IMAGE_KEY = "observation/wrist_image"     # the proxy's default se
 
 
 class MemoryPolicyExtension(Extension):
+    """The store, the key and the retrieval of one proxy (module docstring); the log record of every call goes under
+    "memory"."""
+
     name = "memory"
 
     # ------------------------------------------------------------------ command line and construction
     @classmethod
     def add_arguments(cls, parser):
+        """--memory-store, --memory-mode, --memory-seed and --memory-cache."""
         group = parser.add_argument_group("the memory policy (--with memory_policy): the nearest stored moment as a third "
                                           "picture and a sentence in the prompt")
         group.add_argument("--memory-store", required=True, metavar="DIR",
@@ -78,19 +82,19 @@ class MemoryPolicyExtension(Extension):
             raise ValueError(f"memory mode {mode!r}: one of {MODES}")
         started = time.perf_counter()
         self.store = MomentStore.load(path)
-        self.load_s = time.perf_counter() - started
+        self.load_seconds = time.perf_counter() - started
         self.wrist_key = WristKey(task)
         self._check_key_size()
         self.skills = tuple(task.skills)
         self.mode = mode
         self.seed = int(seed)
-        self.rng = np.random.default_rng(self.seed)
+        self.random = np.random.default_rng(self.seed)
         self.pictures = Pictures(self.store.pictures, cache)
         self.wrist_image_key = wrist_image_key
         self.calls = 0
         self.retrieved = 0
         self._warned: set = set()
-        log.info("memory policy: %d entries from %s loaded in %.2f s; mode %s", len(self.store), path, self.load_s, mode)
+        log.info("memory policy: %d entries from %s loaded in %.2f s; mode %s", len(self.store), path, self.load_seconds, mode)
 
     def _check_key_size(self) -> None:
         """The task's key must have as many values as the store's keys (the store was built with the same task file)."""
@@ -102,36 +106,39 @@ class MemoryPolicyExtension(Extension):
 
     # ------------------------------------------------------------------ what the proxy is told
     def config(self) -> dict:
+        """The store, its size, the mode, the key, the seed and the cache size, for the plan record and the metadata."""
         return {"store": str(self.store.path), "entries": len(self.store), "mode": self.mode, "key": KEY_NAME,
                 "seed": self.seed, "cache": self.pictures.capacity}
 
     def metadata(self) -> dict:
+        """The configuration under "memory_policy"."""
         return {"memory_policy": self.config()}
 
     def log_fields(self) -> dict:
+        """memory_mode in every proxy log record."""
         return {"memory_mode": self.mode}
 
     # ------------------------------------------------------------------ every policy call
-    def before_policy(self, obs: dict, ctrl: dict, prompt: str, planner) -> dict:
+    def before_policy(self, observation: dict, control_keys: dict, prompt: str, planner) -> dict:
         """Retrieve for this call and put the memory into the observation; the log record goes under "memory"."""
         started = time.perf_counter()
         self.calls += 1
         if self.mode == "off":
             return {"memory": None}
-        record = self.retrieve(obs, ctrl, prompt, planner)
+        record = self.retrieve(observation, control_keys, prompt, planner)
         if record["entry"] is not None:
-            obs[MEMORY_IMAGE] = self.pictures[record["entry"]]
-            obs["prompt"] = with_memory(prompt, record["sentence"])
+            observation[MEMORY_IMAGE] = self.pictures[record["entry"]]
+            observation["prompt"] = with_memory(prompt, record["sentence"])
             self.retrieved += 1
         record["ms"] = 1000 * (time.perf_counter() - started)
         return {"memory": record}
 
-    def retrieve(self, obs: dict, ctrl: dict, prompt: str, planner) -> dict:
+    def retrieve(self, observation: dict, control_keys: dict, prompt: str, planner) -> dict:
         """The retrieval of one call as a log record (LOG_KEYS): the entry and its provenance, or why there is none."""
         record = dict.fromkeys(LOG_KEYS)
         skill = skill_of(prompt, planner, self.skills)
-        frame, fallback = wrist_frame(obs, ctrl, self.wrist_image_key)
-        width = finger_width(ctrl)
+        frame, fallback = wrist_frame(observation, control_keys, self.wrist_image_key)
+        width = finger_width(control_keys)
         record.update(skill=skill, width=width)
         reason = self._missing(skill, frame, fallback, width)
         if reason is not None:
@@ -158,7 +165,7 @@ class MemoryPolicyExtension(Extension):
         others = np.flatnonzero(self.store.skill != skill)
         if not len(others):
             return -1, float("nan"), "wrong"
-        index = int(self.rng.choice(others))
+        index = int(self.random.choice(others))
         return index, float(self.store.keys[index] @ np.asarray(key, np.float32)), "wrong"
 
     def _missing(self, skill, frame, fallback: bool, width) -> str | None:
@@ -181,11 +188,13 @@ class MemoryPolicyExtension(Extension):
         return None
 
     def _warn_once(self, topic: str, message: str) -> None:
+        """A warning once per topic and run."""
         if topic not in self._warned:
             log.warning("memory policy: %s", message)
             self._warned.add(topic)
 
     # ------------------------------------------------------------------ the end of the run
     def close(self) -> None:
+        """The proxy stops: log the calls, the retrievals and the picture cache."""
         log.info("memory policy: %d calls, %d with a memory; %d pictures decoded, %d cached (%.0f MB)", self.calls,
                  self.retrieved, self.pictures.decoded, self.pictures.cached, self.pictures.cache_bytes() / 1e6)

@@ -34,7 +34,7 @@ def history_counts(prompts: Sequence[str], instruction: str, history) -> list[in
 def boundaries(counts: Sequence[int], events: int) -> list[int]:
     """b_1 .. b_events: the first frame with each history count. The count must start at 0, rise by one at a time and reach
     `events`."""
-    steps = {b - a for a, b in zip(counts, counts[1:])}
+    steps = {later - earlier for earlier, later in zip(counts, counts[1:])}
     if not counts or counts[0] != 0 or counts[-1] != events or not steps <= {0, 1}:
         raise ValueError(f"history counts from {counts[:1]} to {counts[-1:]} with steps {sorted(steps)}: expected 0 to "
                          f"{events}")
@@ -50,11 +50,11 @@ def source_frame(split: str, episode: int, frame: int, boundary: int) -> int:
 def label_episode(split: str, episode: int, frames: int, edges: Sequence[int]) -> list[tuple[int, int, int]]:
     """(event, boundary, source frame) of every frame of one episode; (0, -1, -1) before the first event."""
     rows = []
-    for t in range(frames):
-        event = sum(edge <= t for edge in edges)
+    for frame in range(frames):
+        event = sum(edge <= frame for edge in edges)
         if event == 0:
             rows.append((0, -1, -1))
         else:
             boundary = edges[event - 1]
-            rows.append((event, boundary, source_frame(split, episode, t, boundary)))
+            rows.append((event, boundary, source_frame(split, episode, frame, boundary)))
     return rows

@@ -70,4 +70,11 @@ with the history method. The pages give the conditions, the timing and what fail
 | Memory policy | long-term memory read by the policy: the stored moment of recorded episodes most similar to the current one (its wrist picture and the next movement as a sentence) in the policy's input at every call; the policy reads it, but it does not improve it (98 of 100 with memory, 96 without) | `--with memory_policy` | [docs/methods/memory_policy](docs/methods/memory_policy/README.md) |
 | Preference notebook | long-term memory of the user: short rules with a scope (the plan, a skill's completion rule, the planner's strictness), written from the user's words and after failures, read by the VLM writer's planner before every episode; "only the red block today" gave the red-only plan in 20 of 20 episodes (0 of 20 without), a correction raised the success from 12 to 19 of 20 | `--with notebook`, with `--writer vlm` | [docs/methods/notebook](docs/methods/notebook/README.md) |
 
-Each further writer or method gets its own page under `docs/writers/` or `docs/methods/` and a row in these tables.
+## Tried and not adopted
+
+| idea | result | page |
+|---|---|---|
+| Frame window: the last 8-16 policy calls as compressed frame summaries, pooled into the action expert's conditioning | 6-12 of 100 in two versions (the recurrent memory on the same data: 34-39); the information was in the window, selected in the second version, and not used by the controller | [docs/methods/frame_window](docs/methods/frame_window/README.md) |
+
+Each further writer or method gets its own page under `docs/writers/` or `docs/methods/` and a row in these tables; an idea
+that was evaluated and did not work gets a page and a row here.

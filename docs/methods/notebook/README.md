@@ -104,3 +104,24 @@ which came from the annotations (the gold writer):
   data always took red first.
 - Reading the notebook costs 0.5 ms at an episode start and 0.2 ms per monitor question; the writer needs about 1.5 model
   calls per message.
+
+Ten days with one user (80 episodes, seeds 3001-3080; nine messages: double-check, later "be quick"; blue first, later
+withdrawn; only red today; a harmful 35 cm correction; small talk; blue first for one session; the planning model wrote the
+notebook; the sub-goal policy with the VLM writer; pre-registered):
+
+| condition | plan followed (72 episodes from the first plan preference on) | parameters in force | task success / 80 | done the user's way | user effort |
+|---|---|---|---|---|---|
+| the notebook | 72/72 | 76/76 | 54 | 54 | 9 messages, 91 words |
+| no memory (each message before the next episode only) | 33/72 | 0/76 | 73 | 40 | 9 messages, 91 words |
+| every message restated before every episode | 72/72 | 0/76 | 58 | 58 | 280 messages, 3,376 words |
+
+- The notebook follows the user as the restating user does (p = 1.0) and far better than no memory (p = 3.6e-12), at a
+  thirtieth of the user's words, with 8.8 words added to the plan request instead of 42, and 26 model calls per episode
+  instead of 34 (its "be quick" preset halves the questions from day 6 on).
+- No false application in 80 episodes: the day rule ended at midnight, the session rule with the session, the withdrawal
+  held for three days, and the instruction's own order won in the two control episodes.
+- The harmful correction was applied in two episodes, both failed, and retired itself (votes 2 -> 1 -> 0); it was never
+  applied again.
+- The no-memory robot has the highest task success because it ignores the user: it runs the red-first order the policy
+  executes better. On the blue-first days every condition that follows the user completes 2-4 of 8 episodes.
+- With the robot's own lessons added (reflection): 53 of 80, the same as without them.

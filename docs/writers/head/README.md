@@ -45,7 +45,8 @@ policy's own rollouts, labelled by another writer, here the rules writer. The id
    features; the fit is a logistic regression with balanced class weights, its L2 penalty chosen by a 5-fold
    cross-validation over episodes, and the threshold that 1 % of the out-of-fold negatives reach. The head directory holds
    `head.npz` (weights, bias, the features' mean and standard deviation, threshold, N, layer, pooling), `head.json` (how it
-   was fitted) and `head.sha256` (checked whenever the head is loaded).
+   was fitted) and `head.sha256` (checked whenever the head is loaded). No fitted head and no policy checkpoint is
+   distributed with the repository; these two steps produce them.
 3. **Serve the policy with its head** (openpi environment); every reply then carries
    `event_head: {score, done, threshold, ms}`:
 

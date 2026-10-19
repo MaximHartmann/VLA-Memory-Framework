@@ -34,7 +34,8 @@ never moves back. The writer draws on SayCan (a language model plans over a fixe
   serves one with vLLM (the reference setup: Qwen3.8-27B-INT4 on two RTX 3090).
 - A task file; `vla_memory/tasks/red_blue_blocks.yaml` is the reference: objects, verbs, skill template, completion criteria,
   the system texts that describe the cameras.
-- Optional: an exemplar store built from recorded demonstrations (`scripts/build_exemplar_store.py`).
+- Optional: an exemplar store built from recorded demonstrations (`scripts/build_exemplar_store.py`); no store is
+  distributed with the repository.
 - An environment that sends the full instruction as `prompt` and the control keys under `memory/`: step, episode, the raw
   camera frames, gripper closedness and hand height. `vla_memory.env_keys.ControlKeys` builds them.
 

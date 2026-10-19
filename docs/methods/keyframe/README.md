@@ -44,8 +44,8 @@ than the frame itself, since at run time the picture is taken at the call that s
    It checks that both datasets of a split hold the same frames and writes `<name>_train` and `<name>_val` with the image
    column `memory_image` and a per-frame manifest, `keyframe_frames.csv`.
 2. **Training:** one policy from `pi05_base` with the memoryless policy's recipe (30,000 steps); the config reads
-   `hartmann/red_blue_v2_abs_keyframe_train` (step 1 with `--repo-id hartmann/red_blue_v2_abs_keyframe`). In the openpi
-   checkout with our changes (`training/README.md`):
+   `vla_memory/red_blue_v2_abs_keyframe_train`, the local dataset step 1 writes with `--repo-id
+   vla_memory/red_blue_v2_abs_keyframe` (not distributed; `training/README.md`). In the openpi checkout with our changes:
 
    ```
    uv run scripts/compute_norm_stats.py --config-name pi05_red_blue_v2_keyframe

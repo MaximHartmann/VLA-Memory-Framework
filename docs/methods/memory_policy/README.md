@@ -51,8 +51,9 @@ is in the training distribution. The idea follows retrieval-augmented policies s
    `<name>_val` with the image column `memory_image`, the prompt with the memory and a per-frame manifest.
 2. **Training.** Two policies from `pi05_base` on the same frames: `pi05_red_blue_v2_memory` reads the memory, the control
    `pi05_red_blue_v2_memory_control` gets the frames without it, so that their difference is the memory, not the data.
-   Both configs read `hartmann/red_blue_v2_abs_memory_train` (step 1 with `--repo-id hartmann/red_blue_v2_abs_memory`). In
-   the openpi checkout with our changes (`training/README.md`), the norm statistics once per config, then per policy:
+   Both configs read `vla_memory/red_blue_v2_abs_memory_train`, the local dataset step 1 writes with `--repo-id
+   vla_memory/red_blue_v2_abs_memory` (not distributed, like the store; `training/README.md`). In the openpi checkout with
+   our changes, the norm statistics once per config, then per policy:
 
    ```
    uv run scripts/compute_norm_stats.py --config-name pi05_red_blue_v2_memory

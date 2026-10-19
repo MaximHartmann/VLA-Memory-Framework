@@ -48,6 +48,7 @@ from vla_memory.task import TaskSpec
 
 # ---------------------------------------------------------------------- episodes and rows
 def episode_files(patterns) -> list[pathlib.Path]:
+    """The episode files matching the globs, sorted and without duplicates."""
     paths = {path for pattern in patterns for path in glob.glob(str(pathlib.Path(pattern).expanduser()))}
     files = sorted(pathlib.Path(path) for path in paths)
     if not files:
@@ -76,6 +77,7 @@ def episode_rows(files, task: TaskSpec, k_max: int) -> list[list]:
 
 # ---------------------------------------------------------------------- features
 def letterbox(image: np.ndarray, size: int) -> np.ndarray:
+    """The image resized with padding to size x size, as the reference environment sends it to the policy."""
     from openpi_client import image_tools
     return image_tools.convert_to_uint8(image_tools.resize_with_pad(image, size, size))
 
@@ -105,27 +107,29 @@ def compute_features(files, rows: list, task: TaskSpec, args) -> np.ndarray:
     policy, train_config = create_policy(args)
     feature = LayerFeature(policy, train_config, layer=args.layer, batch=args.batch)
     prompts = HistoryPrompt(task)
-    out = []
+    features = []
     for path, rows_of_episode in zip(files, rows):
         with np.load(path) as episode:
             observations = row_observations(episode, rows_of_episode, prompts, task, args)
         inputs = [policy._input_transform(observation) for observation in observations]
-        out.append(feature.features(inputs).astype(np.float16))
+        features.append(feature.features(inputs).astype(np.float16))
         print(f"[fit_event_head] {path.name}: {len(rows_of_episode)} rows", flush=True)
-    return np.concatenate(out)
+    return np.concatenate(features)
 
 
 def save_features(path: pathlib.Path, files, rows: list, features: np.ndarray, args) -> None:
+    """The features file: the features, the rows as (episode, frame, k, label), the episode files and how they were computed."""
     flat = [(index, frame, k, label) for index, episode in enumerate(rows) for frame, k, label in episode]
     table = np.asarray(flat, np.int64).reshape(-1, 4)
     source = {"config": args.config, "checkpoint": args.checkpoint, "center_crop": args.center_crop, "layer": args.layer,
               "pool": "text", "image_size": args.image_size, "batch": args.batch}
-    np.savez(path, features=features, rows=table, episodes=np.array([f.name for f in files]), source=json.dumps(source))
+    np.savez(path, features=features, rows=table, episodes=np.array([file.name for file in files]), source=json.dumps(source))
 
 
 def load_features(path: pathlib.Path) -> dict:
+    """The features file as save_features wrote it."""
     with np.load(path) as saved:
-        return {"features": saved["features"], "rows": saved["rows"], "episodes": [str(e) for e in saved["episodes"]],
+        return {"features": saved["features"], "rows": saved["rows"], "episodes": [str(name) for name in saved["episodes"]],
                 "source": json.loads(str(saved["source"]))}
 
 
@@ -143,9 +147,10 @@ def description(saved: dict, report: dict) -> dict:
 
 
 def fit(saved: dict, args) -> None:
+    """Fit the head on the saved features and save it to --out with its description."""
     table = saved["rows"]
-    l2s = tuple(args.l2) if args.l2 else head_fit.L2_GRID
-    head, report = head_fit.fit_head(saved["features"].astype(np.float32), table[:, 3], table[:, 0].tolist(), l2s=l2s,
+    l2_grid = tuple(args.l2) if args.l2 else head_fit.L2_GRID
+    head, report = head_fit.fit_head(saved["features"].astype(np.float32), table[:, 3], table[:, 0].tolist(), l2_grid=l2_grid,
                                      folds=args.folds, fpr=args.fpr, consecutive=args.consecutive,
                                      layer=saved["source"]["layer"])
     digests = save_head(args.out, head, description(saved, report))
@@ -155,6 +160,7 @@ def fit(saved: dict, args) -> None:
 
 # ---------------------------------------------------------------------- main
 def parse_args(argv=None) -> argparse.Namespace:
+    """The episodes, the features file, the head directory, the policy and the fit's parameters."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--episodes", action="append", default=[], metavar="GLOB", help="episode files (repeatable)")
     parser.add_argument("--features", type=pathlib.Path, required=True,
@@ -179,11 +185,12 @@ def parse_args(argv=None) -> argparse.Namespace:
 
 
 def main(argv=None) -> int:
+    """Compute the features when the features file does not exist yet, then fit the head."""
     args = parse_args(argv)
     if not args.features.exists():
         if not (args.episodes and args.config and args.checkpoint):
             raise SystemExit("computing the features needs --episodes, --config and --checkpoint")
-        task = TaskSpec.load(args.task) if args.task else TaskSpec.default()
+        task = TaskSpec.load_or_default(args.task)
         files = episode_files(args.episodes)
         k_max = int((task.history or {}).get("max_lines", len(task.skills) - 1)) - 1
         rows = episode_rows(files, task, k_max)

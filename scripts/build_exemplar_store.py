@@ -20,24 +20,32 @@ from vla_memory.writers.vlm import ExemplarStore, PhaseLabeller, load_npz_episod
 from vla_memory.writers.vlm.labels import parse_episode_ids  # noqa: E402
 
 
+def parse_args() -> argparse.Namespace:
+    """The demonstrations, the episodes and stride, the output file, the task and the recordings' layout."""
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--demos", required=True)
+    parser.add_argument("--episodes", default="0-19")
+    parser.add_argument("--stride", type=int, default=8)
+    parser.add_argument("--out", required=True)
+    parser.add_argument("--task", default=None)
+    parser.add_argument("--cameras", nargs="+", default=["exterior", "wrist"])
+    parser.add_argument("--gripper-column", type=int, default=7)
+    return parser.parse_args()
+
+
 def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--demos", required=True)
-    ap.add_argument("--episodes", default="0-19")
-    ap.add_argument("--stride", type=int, default=8)
-    ap.add_argument("--out", required=True)
-    ap.add_argument("--task", default=None)
-    ap.add_argument("--cameras", nargs="+", default=["exterior", "wrist"])
-    ap.add_argument("--gripper-column", type=int, default=7)
-    a = ap.parse_args()
-    task = TaskSpec.load(a.task) if a.task else TaskSpec.default()
-    eps = parse_episode_ids(a.episodes)
-    st = ExemplarStore.build(fingerprint_from_task(task), task, load_npz_episodes(a.demos, eps, a.cameras),
-                             PhaseLabeller(task, state_gripper_index=a.gripper_column), a.stride, a.out, camera_names=a.cameras)
-    print(f"built {len(st)} entries from {len(eps)} episodes -> {a.out}")
-    for o in task.objects:
-        print(f" {o}:", dict(Counter(m[task.field(o)] for m in st.meta)))
-    print(" gripper:", dict(Counter(m["gripper"] for m in st.meta)), "\n skill:", dict(Counter(m["subgoal"] for m in st.meta)))
+    """Build and save the store, then print how its entries are labelled."""
+    args = parse_args()
+    task = TaskSpec.load_or_default(args.task)
+    episode_ids = parse_episode_ids(args.episodes)
+    store = ExemplarStore.build(fingerprint_from_task(task), task, load_npz_episodes(args.demos, episode_ids, args.cameras),
+                                PhaseLabeller(task, state_gripper_index=args.gripper_column), args.stride, args.out,
+                                camera_names=args.cameras)
+    print(f"built {len(store)} entries from {len(episode_ids)} episodes -> {args.out}")
+    for object_name in task.objects:
+        print(f" {object_name}:", dict(Counter(entry[task.field(object_name)] for entry in store.meta)))
+    print(" gripper:", dict(Counter(entry["gripper"] for entry in store.meta)),
+          "\n skill:", dict(Counter(entry["subgoal"] for entry in store.meta)))
 
 
 if __name__ == "__main__":

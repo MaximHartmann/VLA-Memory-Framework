@@ -17,24 +17,20 @@ the input and
 
 plus memory_frames.csv in each dataset folder: per frame the retrieved entry, its similarity and rule, and the prompt.
 Building the store and labelling the frames is vla_memory.methods.memory_policy.build; this script reads, calls it and
-writes.
-The finger width comes from the dataset's state (finger_width: the red/blue convention). The task file (--task, default
-the packaged red/blue task) gives the colours of the retrieval key and the skill list. Run where lerobot is installed
+writes. The finger width comes from the dataset's state (finger_width: the red/blue convention). The task file (--task,
+default the packaged red/blue task) gives the colours of the retrieval key and the skill list. Run where lerobot is installed
 (the openpi environment) with the framework on PYTHONPATH.
 """
 from __future__ import annotations
 
 import argparse
-import csv
 import dataclasses
-import io
 import json
 import pathlib
 import sys
 
 import numpy as np
 import pyarrow.parquet as pq
-from PIL import Image
 
 from vla_memory.methods.memory_policy import build
 from vla_memory.methods.memory_policy.gripper import gripper_state
@@ -42,6 +38,9 @@ from vla_memory.methods.memory_policy.key import WristKey
 from vla_memory.methods.memory_policy.pictures import Pictures
 from vla_memory.methods.memory_policy.store import MomentStore, save_store
 from vla_memory.task import TaskSpec
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the shared helpers, also when the script is loaded by its path
+from lerobot_tools import create_memory_dataset, decode_png, episode_files, output_dataset, read_info, read_tasks, write_manifest  # noqa: E402
 
 FINGER_SCALE = 0.04          # m: the red/blue state's last value is 1 - (one finger's opening) / FINGER_SCALE
 PICTURE_CACHE = 2048         # decoded store pictures kept while writing (230 KB each)
@@ -75,22 +74,6 @@ def dataset_argument(text: str) -> tuple[pathlib.Path, str]:
     return pathlib.Path(path).expanduser(), label
 
 
-def read_info(root: pathlib.Path) -> dict:
-    """meta/info.json of a dataset; the two cameras must be stored as images."""
-    info = json.loads((root / "meta/info.json").read_text())
-    for name in ("image", "wrist_image"):
-        if info["features"][name]["dtype"] != "image":
-            raise SystemExit(f"{root}: {name} is stored as {info['features'][name]['dtype']}; convert with --no-videos")
-    return info
-
-
-def read_tasks(root: pathlib.Path) -> dict[int, str]:
-    """task_index -> task string of a dataset."""
-    lines = (root / "meta/tasks.jsonl").read_text().splitlines()
-    rows = [json.loads(line) for line in lines if line.strip()]
-    return {int(row["task_index"]): row["task"] for row in rows}
-
-
 def column(table, name: str) -> np.ndarray:
     """A vector column of a parquet table as a float32 array (frames, size)."""
     return np.stack(table.column(name).to_numpy(zero_copy_only=False)).astype(np.float32)
@@ -110,16 +93,12 @@ def read_episode(path: pathlib.Path, tasks: dict[int, str]) -> dict:
 def episodes(root: pathlib.Path, label: str, split: str):
     """(build.Episode, the raw episode) of every episode of one dataset, in file order."""
     tasks = read_tasks(root)
-    for path in sorted((root / "data").rglob("episode_*.parquet")):
+    for path in episode_files(root):
         raw = read_episode(path, tasks)
         episode = build.Episode(episode_id=f"{label}_{split}_{raw['index']:06d}", source=label,
                                 joints=raw["state"][:, :7], actions=raw["actions"],
                                 widths=finger_width(raw["state"]), skills=raw["skills"])
         yield episode, raw
-
-
-def decode_png(data: bytes) -> np.ndarray:
-    return np.asarray(Image.open(io.BytesIO(data)).convert("RGB"))
 
 
 # ------------------------------------------------------------------------------------------------------- the store
@@ -136,21 +115,6 @@ def make_store(train: list, store_dir: pathlib.Path, wrist_key: WristKey, skills
 
 
 # ---------------------------------------------------------------------------------------------------------- writing
-def feature(spec: dict) -> dict:
-    """A column of info.json as LeRobotDataset.create takes it (the shape as a tuple)."""
-    return {**spec, "shape": tuple(spec["shape"])}
-
-
-def create_dataset(repo_id: str, path: pathlib.Path, info: dict):
-    """An empty LeRobot dataset with the input's columns plus memory_image (stored like the wrist image)."""
-    from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
-    features = {name: feature(info["features"][name]) for name in ("image", "wrist_image", "state", "actions")}
-    features["memory_image"] = feature(info["features"]["wrist_image"])
-    return LeRobotDataset.create(repo_id=repo_id, root=path, fps=info["fps"], robot_type=info["robot_type"],
-                                 features=features, use_videos=False, image_writer_processes=4,
-                                 image_writer_threads=8)
-
-
 def write_episode(dataset, episode: build.Episode, raw: dict, memory: Memory) -> list:
     """Label every frame of one episode and add the episode to the dataset; returns its manifest rows."""
     wrist = [decode_png(data) for data in raw["wrist_png"]]
@@ -179,30 +143,24 @@ def manifest_row(episode_index: int, step: int, episode: build.Episode, label: b
             label.rule, label.prompt]
 
 
-def write_manifest(path: pathlib.Path, rows: list) -> None:
-    with path.open("w", newline="") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(MANIFEST_COLUMNS)
-        writer.writerows(rows)
-
-
 def write_split(split: str, datasets: list, memory: Memory, args: argparse.Namespace) -> dict:
     """One output dataset (and its manifest) from the input datasets of a split; returns its counts."""
-    repo_id, path = output(args, split)
-    dataset = create_dataset(repo_id, path, read_info(datasets[0][0]))
+    repo_id, path = output_dataset(args, split)
+    dataset = create_memory_dataset(repo_id, path, read_info(datasets[0][0]))
     rows = []
     for root, label in datasets:
         for episode, raw in episodes(root, label, split):
             rows.extend(write_episode(dataset, episode, raw, memory))
             print(f"[relabel] {repo_id}: {episode.episode_id}, {len(rows)} frames", flush=True)
     dataset.stop_image_writer()
-    write_manifest(path / MANIFEST, rows)
+    write_manifest(path / MANIFEST, MANIFEST_COLUMNS, rows)
     without = sum(1 for row in rows if not row[HAS_MEMORY])
     return {"episodes": dataset.num_episodes, "frames": len(rows), "no_memory": without}
 
 
 # ------------------------------------------------------------------------------------------------------------- main
 def parse_args(argv=None) -> argparse.Namespace:
+    """The input datasets with their labels, the store, the output folder and name, and the task file."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--train", type=dataset_argument, action="append", required=True, metavar="PATH:LABEL",
                         help="a training dataset and its source label (repeatable)")
@@ -220,28 +178,23 @@ def splits(args: argparse.Namespace) -> dict:
     return {split: datasets for split, datasets in (("train", args.train), ("val", args.val)) if datasets}
 
 
-def output(args: argparse.Namespace, split: str) -> tuple[str, pathlib.Path]:
-    """The repo id and the folder of a split's output dataset."""
-    repo_id = f"{args.repo_id}_{split}"
-    return repo_id, args.root / repo_id
-
-
 def check_arguments(args: argparse.Namespace) -> None:
     """Unique source labels per split (they make the episode ids); no output dataset and no store there already."""
     for split, datasets in splits(args).items():
         labels = [label for _, label in datasets]
         if len(set(labels)) != len(labels):
             raise SystemExit(f"--{split}: every dataset needs its own source label, got {labels}")
-        if output(args, split)[1].exists():
-            raise SystemExit(f"{output(args, split)[1]} exists; refusing to overwrite")
+        if output_dataset(args, split)[1].exists():
+            raise SystemExit(f"{output_dataset(args, split)[1]} exists; refusing to overwrite")
     if args.store.exists() and any(args.store.iterdir()):
         raise SystemExit(f"{args.store} is not empty; refusing to overwrite")
 
 
 def main(argv=None) -> int:
+    """Build the store from the training datasets, then write every split with its memories; print the counts."""
     args = parse_args(argv)
     check_arguments(args)
-    task = TaskSpec.load(args.task) if args.task else TaskSpec.default()
+    task = TaskSpec.load_or_default(args.task)
     wrist_key = WristKey(task)
     summary = {"store_entries": make_store(args.train, args.store, wrist_key, task.skills)}
     print(f"[relabel] store: {summary['store_entries']} entries in {args.store}", flush=True)

@@ -27,19 +27,20 @@ keyframe (-1: none). Run where lerobot is installed (the openpi environment) wit
 from __future__ import annotations
 
 import argparse
-import csv
-import io
 import json
 import pathlib
 import sys
 
 import numpy as np
 import pyarrow.parquet as pq
-from PIL import Image
 
 from vla_memory.methods.history.prompt import HistoryPrompt
 from vla_memory.methods.keyframe import labels
 from vla_memory.task import TaskSpec
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the shared helpers, also when the script is loaded by its path
+from lerobot_tools import (create_memory_dataset, decode_png, episode_files, output_dataset, read_info, read_tasks,  # noqa: E402
+                           write_manifest)
 
 COLUMNS = ("image", "wrist_image", "state", "actions", "timestamp", "frame_index", "episode_index", "index", "task_index")
 MANIFEST = "keyframe_frames.csv"
@@ -55,25 +56,6 @@ def dataset_pair(text: str) -> tuple[pathlib.Path, pathlib.Path]:
     return pathlib.Path(frames).expanduser(), pathlib.Path(events).expanduser()
 
 
-def read_info(root: pathlib.Path) -> dict:
-    """meta/info.json of a dataset; the two cameras must be stored as images."""
-    info = json.loads((root / "meta/info.json").read_text())
-    for name in ("image", "wrist_image"):
-        if info["features"][name]["dtype"] != "image":
-            raise SystemExit(f"{root}: {name} is stored as {info['features'][name]['dtype']}; convert with --no-videos")
-    return info
-
-
-def read_tasks(root: pathlib.Path) -> dict[int, str]:
-    lines = (root / "meta/tasks.jsonl").read_text().splitlines()
-    rows = [json.loads(line) for line in lines if line.strip()]
-    return {int(row["task_index"]): row["task"] for row in rows}
-
-
-def episode_files(root: pathlib.Path) -> list[pathlib.Path]:
-    return sorted((root / "data").rglob("episode_*.parquet"))
-
-
 def read_episode(path: pathlib.Path) -> dict:
     """One episode's columns: the PNG bytes of both cameras, state, actions, timestamps and indices."""
     table = pq.read_table(path, columns=list(COLUMNS))
@@ -86,40 +68,25 @@ def read_episode(path: pathlib.Path) -> dict:
 def first_difference(frames: dict, events: dict) -> str | None:
     """The first column in which the two episodes differ (the task aside), or None."""
     for name in COLUMNS[:-1]:
-        a, b = frames[name], events[name]
-        same = a == b if isinstance(a, list) else (a.shape == b.shape and np.array_equal(a, b))
+        left, right = frames[name], events[name]
+        if isinstance(left, list):
+            same = left == right
+        else:
+            same = left.shape == right.shape and np.array_equal(left, right)
         if not same:
             return name
     return None
 
 
-def decode_png(data: bytes) -> np.ndarray:
-    return np.asarray(Image.open(io.BytesIO(data)).convert("RGB"))
-
-
 # ----------------------------------------------------------------------------------------------------------- writing
-def feature(spec: dict) -> dict:
-    """A column of info.json as LeRobotDataset.create takes it (the shape as a tuple)."""
-    return {**spec, "shape": tuple(spec["shape"])}
-
-
-def create_dataset(repo_id: str, path: pathlib.Path, info: dict):
-    """An empty LeRobot dataset with the input's columns plus memory_image (stored like the wrist image)."""
-    from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
-    features = {name: feature(info["features"][name]) for name in ("image", "wrist_image", "state", "actions")}
-    features["memory_image"] = feature(info["features"]["wrist_image"])
-    return LeRobotDataset.create(repo_id=repo_id, root=path, fps=info["fps"], robot_type=info["robot_type"],
-                                 features=features, use_videos=False, image_writer_processes=4, image_writer_threads=8)
-
-
 def write_episode(dataset, episode: dict, prompts: list[str], rows: list[tuple]) -> None:
     """Add one episode with its keyframes to the dataset."""
     wrists = [decode_png(data) for data in episode["wrist_image"]]
     empty = np.zeros_like(wrists[0])
-    for t, (_, _, source) in enumerate(rows):
-        dataset.add_frame({"image": decode_png(episode["image"][t]), "wrist_image": wrists[t],
-                           "memory_image": empty if source < 0 else wrists[source], "state": episode["state"][t],
-                           "actions": episode["actions"][t], "task": prompts[t]})
+    for frame, (_, _, source) in enumerate(rows):
+        dataset.add_frame({"image": decode_png(episode["image"][frame]), "wrist_image": wrists[frame],
+                           "memory_image": empty if source < 0 else wrists[source], "state": episode["state"][frame],
+                           "actions": episode["actions"][frame], "task": prompts[frame]})
     dataset.save_episode()
 
 
@@ -133,8 +100,8 @@ def label_pair(split: str, index: int, frames_path: pathlib.Path, events_path: p
     episode = int(frames["episode_index"][0])
     if episode != index:
         raise SystemExit(f"{split} {frames_path.name}: episode index {episode}, expected {index}")
-    prompts = [tasks[0][int(k)] for k in frames["task_index"].tolist()]
-    with_history = [tasks[1][int(k)] for k in history_episode["task_index"].tolist()]
+    prompts = [tasks[0][int(task_index)] for task_index in frames["task_index"].tolist()]
+    with_history = [tasks[1][int(task_index)] for task_index in history_episode["task_index"].tolist()]
     counts = [labels.history_counts([text], prompt, history)[0] for prompt, text in zip(prompts, with_history)]
     edges = labels.boundaries(counts, events)
     return frames, prompts, labels.label_episode(split, episode, len(prompts), edges)
@@ -144,33 +111,27 @@ def write_split(split: str, pair: tuple, args: argparse.Namespace, history, even
     """One output dataset and its manifest; returns its counts."""
     frames_root, events_root = pair
     files = episode_files(frames_root)[:args.limit]
-    if [f.name for f in files] != [f.name for f in episode_files(events_root)[:args.limit]]:
+    if [file.name for file in files] != [file.name for file in episode_files(events_root)[:args.limit]]:
         raise SystemExit(f"{split}: the two datasets have different episode files")
-    repo_id, path = output(args, split)
-    dataset = create_dataset(repo_id, path, read_info(frames_root))
+    repo_id, path = output_dataset(args, split)
+    dataset = create_memory_dataset(repo_id, path, read_info(frames_root))
     tasks = (read_tasks(frames_root), read_tasks(events_root))
     manifest = []
     for index, frames_path in enumerate(files):
         events_path = events_root / frames_path.relative_to(frames_root)
         frames, prompts, rows = label_pair(split, index, frames_path, events_path, tasks, history, events)
         write_episode(dataset, frames, prompts, rows)
-        manifest += [[index, t, *row] for t, row in enumerate(rows)]
+        manifest += [[index, frame, *row] for frame, row in enumerate(rows)]
         print(f"[relabel_keyframe] {repo_id}: episode {index}, {len(manifest)} frames", flush=True)
     dataset.stop_image_writer()
-    write_manifest(path / MANIFEST, manifest)
-    per_event = {str(e): sum(1 for row in manifest if row[2] == e) for e in range(events + 1)}
+    write_manifest(path / MANIFEST, MANIFEST_COLUMNS, manifest)
+    per_event = {str(event): sum(1 for row in manifest if row[2] == event) for event in range(events + 1)}
     return {"episodes": len(files), "frames": len(manifest), "frames_per_event": per_event}
-
-
-def write_manifest(path: pathlib.Path, rows: list) -> None:
-    with path.open("w", newline="") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(MANIFEST_COLUMNS)
-        writer.writerows(rows)
 
 
 # ------------------------------------------------------------------------------------------------------------- main
 def parse_args(argv=None) -> argparse.Namespace:
+    """The two datasets per split, the output folder and name, the task file and the smoke-test limit."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--train", type=dataset_pair, required=True, metavar="FRAMES:EVENTS", help="the training split")
     parser.add_argument("--val", type=dataset_pair, default=None, metavar="FRAMES:EVENTS", help="the validation split")
@@ -181,19 +142,14 @@ def parse_args(argv=None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def output(args: argparse.Namespace, split: str) -> tuple[str, pathlib.Path]:
-    """The repo id and the folder of a split's output dataset."""
-    repo_id = f"{args.repo_id}_{split}"
-    return repo_id, args.root / repo_id
-
-
 def main(argv=None) -> int:
+    """Write the keyframe datasets of the given splits and print their counts."""
     args = parse_args(argv)
     splits = {split: pair for split, pair in (("train", args.train), ("val", args.val)) if pair is not None}
     for split in splits:
-        if output(args, split)[1].exists():
-            raise SystemExit(f"{output(args, split)[1]} exists; refusing to overwrite")
-    task = TaskSpec.load(args.task) if args.task else TaskSpec.default()
+        if output_dataset(args, split)[1].exists():
+            raise SystemExit(f"{output_dataset(args, split)[1]} exists; refusing to overwrite")
+    task = TaskSpec.load_or_default(args.task)
     history = HistoryPrompt(task)
     events = int((task.history or {}).get("max_lines", len(task.skills) - 1))
     summary = {split: write_split(split, pair, args, history, events) for split, pair in splits.items()}

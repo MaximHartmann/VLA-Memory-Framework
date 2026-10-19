@@ -1,138 +1,137 @@
 #!/usr/bin/env python3
-"""Stage 2: staged .npz episodes -> a LeRobot dataset openpi can train on.
+"""Recorded episodes (.npz) -> a LeRobot dataset openpi can train on.
 
-Run it in the openpi environment (lerobot is installed there, Isaac Sim is not).
+Run it in the openpi environment (lerobot is installed there, Isaac Sim is not). The schema follows openpi's own LIBERO
+converter: the proprioception in `state`, the actions in `actions`, images with the dtype `image`. Images are stored at their
+native size (320 x 240 in the reference recordings); the resize to 224 x 224 happens in the training transform, exactly as at
+inference, so that it is one shared step rather than two that can drift apart.
 
-Schema follows openpi's own LIBERO converter, whose comment is the contract:
-"OpenPi assumes that proprio is stored in `state` and actions in `actions`.
- LeRobot assumes that dtype of image data is `image`."
+--action-space absolute converts the recorded velocity actions of the arm, (q_cmd - q_meas) / dt, back to the absolute joint
+targets q_cmd = q_meas + action * dt. The inversion is exact, because a recording stores q_meas (state[:, :7]) and its fps.
+Why absolute targets: the velocity targets are spiky (near zero while a waypoint is held, rare large bursts) and their spread
+differs 69-fold across the seven joints, while the absolute targets are smooth and close to the state, which a policy learns
+more reliably. The gripper command (index 7) is absolute in [0, 1] already and is never changed.
 
-Images are stored at the NATIVE 320x240. resize_with_pad to 224x224 happens in
-the training transform, exactly as it does at inference -- keeping the raw data
-means the resize is one shared step rather than two that can drift apart.
+    python training/convert_to_lerobot.py --raw-dir <recordings> --root <dataset root> [--repo-id <user>/<name>]
+        [--no-videos] [--action-space absolute] [--start N] [--limit N] [--overwrite]
 """
-
 from __future__ import annotations
 
 import argparse
 import pathlib
 import shutil
+
 import numpy as np
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--raw-dir", required=True, help="the folder of the staged .npz episodes")
-    ap.add_argument("--repo-id", default="hartmann/red_blue_blocks")
-    ap.add_argument("--root", required=True, help="the LeRobot root folder the dataset is written to")
-    ap.add_argument("--fps", type=int, default=15)
-    ap.add_argument("--use-videos", action="store_true", default=True,
-                    help="MP4 per episode instead of PNG per frame; far kinder to a network file system")
-    ap.add_argument("--no-videos", dest="use_videos", action="store_false")
-    ap.add_argument("--overwrite", action="store_true")
-    ap.add_argument("--start", type=int, default=0,
-                    help="first staged episode index (for train/val splits)")
-    ap.add_argument("--limit", type=int, default=None)
-    ap.add_argument("--action-space", choices=["velocity", "absolute"], default="velocity",
-                    help="velocity: actions exactly as recorded, (q_cmd - q_meas)/dt.  "
-                         "absolute: arm actions converted to absolute joint targets q_cmd. "
-                         "The gripper (index 7) is ALREADY absolute in [0,1] and is never "
-                         "touched by either mode.")
-    args = ap.parse_args()
+def parse_args() -> argparse.Namespace:
+    """The recordings, the dataset to write, the frame rate, the image encoding and the action space."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--raw-dir", required=True, help="the folder of the staged .npz episodes")
+    parser.add_argument("--repo-id", default="vla_memory/red_blue_blocks")
+    parser.add_argument("--root", required=True, help="the LeRobot root folder the dataset is written to")
+    parser.add_argument("--fps", type=int, default=15)
+    parser.add_argument("--use-videos", action="store_true", default=True,
+                        help="MP4 per episode instead of PNG per frame; far kinder to a network file system")
+    parser.add_argument("--no-videos", dest="use_videos", action="store_false")
+    parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--start", type=int, default=0, help="first staged episode index (for train/val splits)")
+    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--action-space", choices=["velocity", "absolute"], default="velocity",
+                        help="velocity: actions exactly as recorded, (q_cmd - q_meas)/dt.  "
+                             "absolute: arm actions converted to absolute joint targets q_cmd. "
+                             "The gripper (index 7) is ALREADY absolute in [0,1] and is never "
+                             "touched by either mode.")
+    return parser.parse_args()
 
+
+def to_absolute(episode) -> np.ndarray:
+    """The arm actions as absolute joint targets, q_cmd = q_meas + velocity * dt; the gripper command stays."""
+    dt = 1.0 / float(episode["fps"])
+    actions = np.array(episode["actions"], dtype=np.float32, copy=True)
+    actions[:, :7] = episode["state"][:, :7] + actions[:, :7] * dt
+    return actions
+
+
+def episode_actions(episode, action_space: str) -> np.ndarray:
+    """The actions of an episode in the chosen action space."""
+    if action_space == "absolute":
+        return to_absolute(episode)
+    return episode["actions"]
+
+
+def describe_input(probe, args) -> dict:
+    """Print the shapes of the recordings (and the spread of the action targets); returns the shapes."""
+    height, width = probe["exterior"].shape[1:3]
+    shapes = {"height": height, "width": width, "state_dim": probe["state"].shape[1], "action_dim": probe["actions"].shape[1]}
+    print(f"[conv] image {height}x{width}  state {shapes['state_dim']}  actions {shapes['action_dim']}", flush=True)
+    print(f"[conv] action space: {args.action_space}", flush=True)
+    if args.action_space == "absolute":
+        absolute = to_absolute(probe)
+        print(f"[conv]   arm target std per-dim: {np.round(absolute[:, :7].std(0), 4)}", flush=True)
+        print(f"[conv]   (velocity was          : {np.round(probe['actions'][:, :7].std(0), 4)})", flush=True)
+    return shapes
+
+
+def create_dataset(args, root: pathlib.Path, shapes: dict):
+    """An empty LeRobot dataset with the two cameras, the state and the actions."""
     from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
+    image = {"dtype": "image", "shape": (shapes["height"], shapes["width"], 3), "names": ["height", "width", "channel"]}
+    features = {"image": image, "wrist_image": dict(image),
+                "state": {"dtype": "float32", "shape": (shapes["state_dim"],), "names": ["state"]},
+                "actions": {"dtype": "float32", "shape": (shapes["action_dim"],), "names": ["actions"]}}
+    return LeRobotDataset.create(repo_id=args.repo_id, root=str(root), fps=args.fps, robot_type="franka_fer",
+                                 use_videos=args.use_videos, features=features, image_writer_threads=8,
+                                 image_writer_processes=4)
 
+
+def add_episode(dataset, file: pathlib.Path, action_space: str) -> int:
+    """Add every frame of one recording to the dataset; returns the number of frames."""
+    episode = np.load(file, allow_pickle=True)
+    actions = episode_actions(episode, action_space)
+    task = str(episode["instruction"])
+    frames = episode["state"].shape[0]
+    for frame in range(frames):
+        dataset.add_frame({"image": episode["exterior"][frame], "wrist_image": episode["wrist"][frame],
+                           "state": episode["state"][frame].astype(np.float32),
+                           "actions": actions[frame].astype(np.float32), "task": task})
+    dataset.save_episode()
+    return frames
+
+
+def report_size(root: pathlib.Path, use_videos: bool) -> None:
+    """Print the number of files and the size of the written dataset."""
+    files = [path for path in root.rglob("*") if path.is_file()]
+    size = sum(path.stat().st_size for path in files)
+    print(f"[conv] on disk: {len(files)} files, {size / 1e9:.2f} GB ({'video' if use_videos else 'PNG'} encoding)", flush=True)
+
+
+def main() -> int:
+    """Convert the recordings of --raw-dir (from --start, at most --limit) into the dataset at --root."""
+    args = parse_args()
     raw = pathlib.Path(args.raw_dir)
     files = sorted(raw.glob("episode_*.npz"))[args.start:]
     if args.limit:
         files = files[: args.limit]
     if not files:
-        print(f"no episodes in {raw}"); return 2
+        print(f"no episodes in {raw}")
+        return 2
     print(f"[conv] {len(files)} staged episodes from {raw}", flush=True)
-
-    def to_absolute(d):
-        """Recover absolute joint targets from the recorded velocity actions.
-
-        generate_demos.py:301 records  act_arm = (q_cmd - q_meas) / dt  and the
-        npz separately stores q_meas as state[:, :7] plus the fps, so the
-        inversion  q_cmd = q_meas + act_arm * dt  is exact rather than an
-        approximation -- no Isaac re-recording is needed.
-
-        WHY: the velocity target spans a 69x std range across the seven joints
-        (0.025 .. 1.736) and is spiky -- mostly near zero while holding a
-        waypoint, with rare large bursts. q_cmd spans 5x (0.059 .. 0.291) and is
-        smooth: 56.3% of consecutive steps change by less than 0.001 rad. The
-        step-20000 checkpoint reproduced that structure in its errors, emitting
-        arm velocities with 3.4-4.6x the expert's normalised std while the
-        gripper -- the one already-absolute dimension -- came out at 1.07x.
-
-        CAVEAT: q_cmd is very close to q_meas (near-identical per-dim std), so a
-        model can score well by echoing its own state input and barely moving.
-        The 10-step action horizon has to extrapolate ~0.67 s, which mitigates
-        this, but it is the first thing to check on the new checkpoint: compare
-        predicted q_cmd against the state that was fed in.
-        """
-        dt = 1.0 / float(d["fps"])
-        act = np.array(d["actions"], dtype=np.float32, copy=True)
-        act[:, :7] = d["state"][:, :7] + act[:, :7] * dt
-        return act
-
-    probe = np.load(files[0], allow_pickle=True)
-    H, W = probe["exterior"].shape[1:3]
-    state_dim = probe["state"].shape[1]
-    act_dim = probe["actions"].shape[1]
-    print(f"[conv] image {H}x{W}  state {state_dim}  actions {act_dim}", flush=True)
-    print(f"[conv] action space: {args.action_space}", flush=True)
-    if args.action_space == "absolute":
-        _a = to_absolute(probe)
-        print(f"[conv]   arm target std per-dim: {np.round(_a[:, :7].std(0), 4)}", flush=True)
-        print(f"[conv]   (velocity was          : {np.round(probe['actions'][:, :7].std(0), 4)})", flush=True)
-
+    shapes = describe_input(np.load(files[0], allow_pickle=True), args)
     root = pathlib.Path(args.root)
     if root.exists():
         if not args.overwrite:
-            print(f"[conv] {root} exists; pass --overwrite"); return 2
+            print(f"[conv] {root} exists; pass --overwrite")
+            return 2
         shutil.rmtree(root)
-
-    ds = LeRobotDataset.create(
-        repo_id=args.repo_id,
-        root=str(root),
-        fps=args.fps,
-        robot_type="franka_fer",
-        use_videos=args.use_videos,
-        features={
-            "image":       {"dtype": "image", "shape": (H, W, 3), "names": ["height", "width", "channel"]},
-            "wrist_image": {"dtype": "image", "shape": (H, W, 3), "names": ["height", "width", "channel"]},
-            "state":       {"dtype": "float32", "shape": (state_dim,), "names": ["state"]},
-            "actions":     {"dtype": "float32", "shape": (act_dim,),   "names": ["actions"]},
-        },
-        image_writer_threads=8,
-        image_writer_processes=4,
-    )
-
+    dataset = create_dataset(args, root, shapes)
     total = 0
-    for f in files:
-        d = np.load(f, allow_pickle=True)
-        acts = to_absolute(d) if args.action_space == "absolute" else d["actions"]
-        task = str(d["instruction"])
-        T = d["state"].shape[0]
-        for t in range(T):
-            ds.add_frame({
-                "image": d["exterior"][t],
-                "wrist_image": d["wrist"][t],
-                "state": d["state"][t].astype(np.float32),
-                "actions": acts[t].astype(np.float32),
-                "task": task,
-            })
-        ds.save_episode()
-        total += T
-        print(f"[conv] {f.name}: {T} frames  (total {total})", flush=True)
-
+    for file in files:
+        frames = add_episode(dataset, file, args.action_space)
+        total += frames
+        print(f"[conv] {file.name}: {frames} frames  (total {total})", flush=True)
     print(f"\n[conv] wrote {len(files)} episodes / {total} frames to {root}", flush=True)
-    n_files = sum(1 for _ in root.rglob("*") if _.is_file())
-    size = sum(p.stat().st_size for p in root.rglob("*") if p.is_file())
-    print(f"[conv] on disk: {n_files} files, {size/1e9:.2f} GB "
-          f"({'video' if args.use_videos else 'PNG'} encoding)", flush=True)
+    report_size(root, args.use_videos)
     return 0
 
 

@@ -23,7 +23,7 @@ from typing import Any
 
 from .entry import STRICTNESS_PRESETS, VALIDITY
 from .store import ProfileStore
-from .writer_log import query_key, query_line, render_log
+from .writer_log import render_log
 from .writer_schema import (KINDS, OPS, ROLE, WITHDRAWAL, answer_entries, entry_schema, merge_schema, scopes, show,
                             vocabulary)
 
@@ -83,103 +83,106 @@ class PreferenceWriter:
         """A user message -> proposed entries -> merged into the notebook."""
         self.calls = []
         self.store.reload()   # the planner may have saved its applied-counters since
-        props = self.extract(text, gold)
-        return {"proposals": props, "ops": [self.merge(p) for p in props], "calls": self.calls}
+        proposals = self.extract(text, gold)
+        return {"proposals": proposals, "ops": [self.merge(proposal) for proposal in proposals], "calls": self.calls}
 
     def from_failure(self, records, outcome: str = "", complaint: str = "", gold=None) -> dict:
         """A failed episode's planner records (+ the outcome, + the user's remark) -> at most one correction, merged."""
         self.calls = []
         self.store.reload()
-        props = self.distil(records, outcome, complaint, gold)
-        return {"proposals": props, "ops": [self.merge(p) for p in props], "calls": self.calls}
+        proposals = self.distil(records, outcome, complaint, gold)
+        return {"proposals": proposals, "ops": [self.merge(proposal) for proposal in proposals], "calls": self.calls}
 
     def feedback(self, applied_ids, success: bool, kinds=("correction",), cap: int = 5) -> dict:
         """+1 for every applied entry of these kinds after a success, up to `cap` (so that a rule which later harms is
         retired within a few failures), -1 after a failure (retired at 0)."""
         self.store.reload()
-        out = {"up": [], "down": [], "retired": []}
-        for i in dict.fromkeys(applied_ids):
-            e = self.store.get(i)
-            if e is None or not e.active or e.kind not in kinds:
+        votes = {"up": [], "down": [], "retired": []}
+        for entry_id in dict.fromkeys(applied_ids):
+            entry = self.store.get(entry_id)
+            if entry is None or not entry.active or entry.kind not in kinds:
                 continue
-            if success and e.importance < cap:
-                self.store.upvote(i)
-                out["up"].append(i)
+            if success and entry.importance < cap:
+                self.store.upvote(entry_id)
+                votes["up"].append(entry_id)
             elif not success:
-                self.store.downvote(i)
-                out["down"].append(i)
-                if not self.store.get(i).active:
-                    out["retired"].append(i)
-        return out
+                self.store.downvote(entry_id)
+                votes["down"].append(entry_id)
+                if not self.store.get(entry_id).active:
+                    votes["retired"].append(entry_id)
+        return votes
 
     # ------------------------------------------------------------------ the three questions
     def extract(self, text: str, gold=None) -> list[dict]:
+        """A user message -> the proposed entries (at most max_entries), checked against the vocabulary."""
         system = f"{ROLE}\n{self._vocab()}\n" + self.EXTRACT_TASK.format(n=self.max_entries)
         schema = entry_schema(self.task, self.max_entries, self.presets)
-        ans = self._ask("extract", system, f'Message: "{text}"', schema, 400, {"gold": gold})
-        items = answer_entries(ans)[: self.max_entries]
-        proposals = (self._proposal(it, source="user", evidence=f'"{text}"') for it in items)
-        return [p for p in proposals if p]
+        answer = self._ask("extract", system, f'Message: "{text}"', schema, 400, {"gold": gold})
+        items = answer_entries(answer)[: self.max_entries]
+        proposals = (self._proposal(item, source="user", evidence=f'"{text}"') for item in items)
+        return [proposal for proposal in proposals if proposal]
 
     def distil(self, records, outcome: str = "", complaint: str = "", gold=None) -> list[dict]:
+        """A failed episode's records -> the proposed corrections (at most DISTIL_MAX), with the episode and step as evidence."""
         system = f"{ROLE}\n{self._vocab()}\n" + self.DISTIL_TASK
         user = self.render_log(records, outcome, complaint)
         schema = entry_schema(self.task, 1, self.presets, distil=True)
-        ans = self._ask("distil", system, user, schema, 300, {"gold": gold})
-        ep = next((r.get("episode") for r in records if r.get("episode") is not None), "?")
-        out = []
-        for it in answer_entries(ans)[: self.DISTIL_MAX]:
-            ev = f"episode {ep} step {it.get('step')}" + (f'; user: "{complaint}"' if complaint else "")
-            p = self._proposal(it, kind="correction", source="distilled", evidence=ev)
-            if p:
-                out.append(p)
-        return out
+        answer = self._ask("distil", system, user, schema, 300, {"gold": gold})
+        episode_id = next((record.get("episode") for record in records if record.get("episode") is not None), "?")
+        proposals = []
+        for item in answer_entries(answer)[: self.DISTIL_MAX]:
+            evidence = f"episode {episode_id} step {item.get('step')}" + (f'; user: "{complaint}"' if complaint else "")
+            proposal = self._proposal(item, kind="correction", source="distilled", evidence=evidence)
+            if proposal:
+                proposals.append(proposal)
+        return proposals
 
-    def merge(self, p: dict) -> dict:
+    def merge(self, proposal: dict) -> dict:
         """Compare a proposal with the active entries of its scope, choose the operation and apply it to the store."""
-        cands = self.store.active(p["scope"])[: self.max_candidates]
-        ids = [e.id for e in cands]
-        back = p["kind"] == WITHDRAWAL
-        ops = ("DELETE", "NOOP") if back else OPS
-        op = "NOOP" if back else "ADD"
+        candidates = self.store.active(proposal["scope"])[: self.max_candidates]
+        ids = [entry.id for entry in candidates]
+        withdrawal = proposal["kind"] == WITHDRAWAL
+        operations = ("DELETE", "NOOP") if withdrawal else OPS
+        operation = "NOOP" if withdrawal else "ADD"
         target = None
-        rec = {"scope": p["scope"], "text": p["text"], "candidates": ids}
-        if cands:
-            op, target = self._merge_answer(p, cands, ops, op, rec)
-        if target is None and op != "ADD":   # an update of nothing is a new rule; deleting or repeating nothing does nothing
-            op = "ADD" if op == "UPDATE" else "NOOP"
-        rec.update(op=op, target=target, entry=self._apply(p, op, target))
-        return rec
+        record = {"scope": proposal["scope"], "text": proposal["text"], "candidates": ids}
+        if candidates:
+            operation, target = self._merge_answer(proposal, candidates, operations, operation, record)
+        if target is None and operation != "ADD":   # an update of nothing is a new rule; deleting or repeating nothing does nothing
+            operation = "ADD" if operation == "UPDATE" else "NOOP"
+        record.update(op=operation, target=target, entry=self._apply(proposal, operation, target))
+        return record
 
-    def _merge_answer(self, p: dict, cands: list, ops: tuple, op: str, rec: dict) -> tuple:
+    def _merge_answer(self, proposal: dict, candidates: list, operations: tuple, operation: str, record: dict) -> tuple:
         """Ask the merge question; returns the chosen operation and its target id (None for none)."""
-        ids = [e.id for e in cands]
-        back = p["kind"] == WITHDRAWAL
-        system = f"{ROLE}\n" + (self.WITHDRAW_TASK if back else self.MERGE_TASK).format(scope=p["scope"])
-        rules = "\n".join(f"- [{e.id}] {self._show(e.text, e.condition, e.params, e.validity)}" for e in cands)
-        if back:
-            user = "Notebook rules:\n" + rules + f"\nTaken back: {p['text']}"
+        ids = [entry.id for entry in candidates]
+        withdrawal = proposal["kind"] == WITHDRAWAL
+        system = f"{ROLE}\n" + (self.WITHDRAW_TASK if withdrawal else self.MERGE_TASK).format(scope=proposal["scope"])
+        rules = "\n".join(f"- [{entry.id}] {self._show(entry.text, entry.condition, entry.params, entry.validity)}"
+                          for entry in candidates)
+        if withdrawal:
+            user = "Notebook rules:\n" + rules + f"\nTaken back: {proposal['text']}"
         else:
-            proposed = self._show(p["text"], p["condition"], p["params"], p["validity"])
+            proposed = self._show(proposal["text"], proposal["condition"], proposal["params"], proposal["validity"])
             user = "Notebook rules:\n" + rules + f"\nProposed rule: {proposed}"
-        ans = self._ask("merge", system, user, merge_schema(ids, ops), 64, {"proposal": p, "candidates": cands})
-        if ans and ans.get("op") in ops:
-            return ans["op"], (ans.get("id") if ans.get("id") in ids else None)
-        rec["fallback"] = True   # failed call: keep a statement rather than lose it; a withdrawal then changes nothing
-        return op, None
+        answer = self._ask("merge", system, user, merge_schema(ids, operations), 64,
+                           {"proposal": proposal, "candidates": candidates})
+        if answer and answer.get("op") in operations:
+            return answer["op"], (answer.get("id") if answer.get("id") in ids else None)
+        record["fallback"] = True   # failed call: keep a statement rather than lose it; a withdrawal then changes nothing
+        return operation, None
 
     # ------------------------------------------------------------------ helpers
     def render_log(self, records, outcome: str = "", complaint: str = "") -> str:
         """The failed episode as the distiller reads it (writer_log.py)."""
         return render_log(self.task, records, outcome, complaint, self.log_lines)
 
-    _query_key = staticmethod(query_key)
-    _query_line = staticmethod(query_line)
-
     def _vocab(self) -> str:
+        """The skills, the scopes and the presets in words (writer_schema.vocabulary)."""
         return vocabulary(self.task, self.presets)
 
     def _show(self, text: str, condition: str, params: dict, validity: str = "until_withdrawn") -> str:
+        """One rule as the merge shows it (writer_schema.show)."""
         return show(text, condition, params, validity, self.presets)
 
     def _proposal(self, item: dict, kind: str | None = None, source: str = "user", evidence: str = "") -> dict | None:
@@ -198,41 +201,45 @@ class PreferenceWriter:
                 "validity": validity, "params": dict(self.presets[preset]) if preset else {}, "preset": preset,
                 "source": source, "evidence": evidence}
 
-    def _apply(self, p: dict, op: str, target: str | None) -> str | None:
-        if op in ("ADD", "UPDATE"):   # an UPDATE that holds for a shorter time suspends the old entry (ProfileStore.add)
-            supersedes = target if op == "UPDATE" else None
-            entry = self.store.add(p["kind"], p["scope"], p["text"], p["condition"], p["params"], p["source"], p["evidence"],
-                                   supersedes=supersedes, validity=p.get("validity", "until_withdrawn"))
+    def _apply(self, proposal: dict, operation: str, target: str | None) -> str | None:
+        """Carry the operation out on the store; returns the id of a new entry (ADD, UPDATE), else None."""
+        if operation in ("ADD", "UPDATE"):   # an UPDATE that holds for a shorter time suspends the old entry (ProfileStore.add)
+            supersedes = target if operation == "UPDATE" else None
+            entry = self.store.add(proposal["kind"], proposal["scope"], proposal["text"], proposal["condition"], proposal["params"],
+                                   proposal["source"], proposal["evidence"], supersedes=supersedes,
+                                   validity=proposal.get("validity", "until_withdrawn"))
             return entry.id
-        if op == "DELETE":
+        if operation == "DELETE":
             self.store.retire(target)
-        elif op == "NOOP" and target:
+        elif operation == "NOOP" and target:
             self.store.upvote(target)   # a repetition confirms the rule, and keeps the longer of the two validities
-            if p["kind"] != WITHDRAWAL:
-                self.store.extend(target, p.get("validity", "until_withdrawn"))
+            if proposal["kind"] != WITHDRAWAL:
+                self.store.extend(target, proposal.get("validity", "until_withdrawn"))
         return None
 
     def _max_tokens(self, system: str, user: str, max_tokens: int) -> int:
         """The answer room: max_tokens plus the reasoning allowance, never more than the context leaves (prompts measured
         at 3.4 or more characters per token)."""
-        mt = max_tokens + self.reasoning_tokens
+        allowed = max_tokens + self.reasoning_tokens
         if self.context_tokens:
-            mt = max(max_tokens, min(mt, self.context_tokens - (len(system) + len(user)) // 3 - 128))
-        return mt
+            allowed = max(max_tokens, min(allowed, self.context_tokens - (len(system) + len(user)) // 3 - 128))
+        return allowed
 
-    def _ask(self, name: str, system: str, user: str, schema: dict, max_tokens: int, ctx: dict | None = None) -> dict | None:
-        rec: dict[str, Any] = {"name": name}
+    def _ask(self, name: str, system: str, user: str, schema: dict, max_tokens: int, context: dict | None = None) -> dict | None:
+        """One question to the model; its answer (None when the call failed), and a call record with the answer, the
+        latency, the token counts, the reasoning and the start of an unparsable answer."""
+        record: dict[str, Any] = {"name": name}
         if self.keep_prompts:
-            rec["prompt"] = [system, user]
+            record["prompt"] = [system, user]
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
         try:
-            r = self.vlm.chat(messages, schema=schema, name=name, max_tokens=self._max_tokens(system, user, max_tokens))
-            rec.update(answer=r.get("json"), ms=r.get("ms"), tokens=[r.get("prompt_tokens"), r.get("completion_tokens")])
-            if r.get("reasoning"):
-                rec["reasoning"] = r["reasoning"]
-            if r.get("json") is None and r.get("text"):   # unparsable answer: keep its start for diagnosis
-                rec["raw"] = r["text"][:600]
-        except Exception as e:  # server down, timeout, unparsable answer: nothing is written from this call
-            rec["error"] = repr(e)
-        self.calls.append(rec)
-        return rec.get("answer")
+            reply = self.vlm.chat(messages, schema=schema, name=name, max_tokens=self._max_tokens(system, user, max_tokens))
+            record.update(answer=reply.get("json"), ms=reply.get("ms"), tokens=[reply.get("prompt_tokens"), reply.get("completion_tokens")])
+            if reply.get("reasoning"):
+                record["reasoning"] = reply["reasoning"]
+            if reply.get("json") is None and reply.get("text"):   # unparsable answer: keep its start for diagnosis
+                record["raw"] = reply["text"][:600]
+        except Exception as error:  # server down, timeout, unparsable answer: nothing is written from this call
+            record["error"] = repr(error)
+        self.calls.append(record)
+        return record.get("answer")

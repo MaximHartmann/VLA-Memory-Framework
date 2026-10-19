@@ -18,30 +18,40 @@ def _trailing_count(flags: list, value: bool) -> int:
 
 
 class ProprioSummary:
-    """The last few readings of gripper closedness and hand height; text() is the sentence for the planner model."""
+    """The last few readings of gripper closedness and hand height; text() is the sentence for the planner model.
+    closed_threshold: the closedness from which the gripper counts as closed; history: how many calls are kept; note: a
+    sentence of the task file about the heights (e.g. the grasp height)."""
 
     def __init__(self, closed_threshold: float = 0.3, history: int = 12, note: str = ""):
         self.closed_threshold = closed_threshold
-        self.history = history
+        self.max_readings = history
         self.note = note
-        self.hist: list[dict] = []
+        self.readings: list[dict] = []
+
+    @classmethod
+    def from_task(cls, task) -> "ProprioSummary":
+        """The summary with the thresholds of the task file's proprio section (closed_threshold, history, note)."""
+        settings = task.proprio or {}
+        return cls(settings.get("closed_threshold", 0.3), settings.get("history", 12), settings.get("note", ""))
 
     def reset(self):
-        self.hist = []
+        """Forget the readings (a new episode)."""
+        self.readings = []
 
     def push(self, values: dict | None):
         """Add one call's readings (gripper_closedness, hand_height); None adds nothing. Keeps the last `history` calls."""
         if values:
-            self.hist.append(dict(values))
-            self.hist = self.hist[-self.history:]
+            self.readings.append(dict(values))
+            self.readings = self.readings[-self.max_readings:]
 
     @property
     def latest(self) -> dict | None:
-        return self.hist[-1] if self.hist else None
+        """The readings of the last call, or None before any call."""
+        return self.readings[-1] if self.readings else None
 
     def text(self) -> str:
         """The sentence: the gripper part and the height part, each only with a reading; "" before any call."""
-        if not self.hist:
+        if not self.readings:
             return ""
         parts = []
         gripper = self._gripper_sentence()
@@ -55,7 +65,7 @@ class ProprioSummary:
     # ------------------------------------------------------------------ the gripper
     def _gripper_sentence(self) -> str | None:
         """The gripper now (closed or open, its closedness) and for how many calls it has been so; None without a reading."""
-        closedness = self.hist[-1].get("gripper_closedness")
+        closedness = self.readings[-1].get("gripper_closedness")
         if closedness is None:
             return None
         if closedness >= self.closed_threshold:
@@ -77,13 +87,13 @@ class ProprioSummary:
 
     def _closed_flags(self) -> list:
         """Per call of the history, whether the gripper counted as closed (closedness at or above the threshold)."""
-        return [x.get("gripper_closedness", 0) >= self.closed_threshold for x in self.hist]
+        return [reading.get("gripper_closedness", 0) >= self.closed_threshold for reading in self.readings]
 
     # ------------------------------------------------------------------ the hand height
     def _height_sentence(self) -> str | None:
         """The hand's height above the table, its trend over the last calls and the task's note; None without a reading
         (a NaN height is no reading)."""
-        height = self.hist[-1].get("hand_height")
+        height = self.readings[-1].get("hand_height")
         if height is None or height != height:
             return None
         sentence = f"hand (gripper) height above the table {100 * height:.1f} cm{self._trend_text()}"
@@ -105,4 +115,5 @@ class ProprioSummary:
 
     def _recent_heights(self) -> list:
         """The hand heights of the last three calls, NaN readings left out."""
-        return [x.get("hand_height") for x in self.hist[-3:] if x.get("hand_height") == x.get("hand_height")]
+        recent = self.readings[-3:]
+        return [reading.get("hand_height") for reading in recent if reading.get("hand_height") == reading.get("hand_height")]

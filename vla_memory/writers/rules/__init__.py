@@ -3,7 +3,7 @@ skill is done, by rules declared in the task file, and advances a pointer throug
 
   writer.RulesWriter         the writer: --writer rules
   rules                      the rule set's parts, re-exported for convenience:
-    rule_spec                    the task file's rules section: parse_rules and the trigger names
+    rule_spec                    the task file's rules section: parse_rules, gripper_thresholds and the trigger names
     rule_monitor.RuleMonitor     the writer's logic: the plan pointer, observe_rows, completed, label_rows (training labels)
     grasp_cycle.GraspCycle       the state machine of one grasp cycle (triggers lift and set_down)
     signal_sequence              phases of signal thresholds (trigger signals): parse_signal_phases, SignalSequence

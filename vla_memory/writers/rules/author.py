@@ -30,11 +30,11 @@ from ...task import TaskSpec
 from ...vlm import VLMBackend
 from .author_demos import demo_event_summary, demo_summary_text, pick_evenly
 from .author_prompt import EASY_HEAD, HARD_HEAD, SYSTEM, answer_schema, build_messages
-from .author_rules_spec import GRIPPER_DEFAULTS, PARAMS, REASON_MAX, VARIANTS, check_rules, gripper_thresholds, with_rules
+from .author_rules_spec import GRIPPER_DEFAULTS, PARAMETERS, REASON_MAX, VARIANTS, check_rules, gripper_thresholds, with_rules
 from .author_yaml import rules_yaml_lines, write_task_yaml
 from .rules import TRIGGERS
 
-__all__ = ["VARIANTS", "PARAMS", "REASON_MAX", "GRIPPER_DEFAULTS", "SYSTEM", "EASY_HEAD", "HARD_HEAD", "gripper_thresholds",
+__all__ = ["VARIANTS", "PARAMETERS", "REASON_MAX", "GRIPPER_DEFAULTS", "SYSTEM", "EASY_HEAD", "HARD_HEAD", "gripper_thresholds",
            "build_messages", "answer_schema", "with_rules", "check_rules", "rules_from_answer", "author_rules",
            "rules_yaml_lines", "write_task_yaml", "demo_event_summary", "demo_summary_text", "pick_evenly", "main"]
 
@@ -74,11 +74,11 @@ def _rule_from_item(verb: str, item: dict, errors: list[str]) -> dict | None:
     """One verb's answer -> its rule in the task file's units; None for an unknown trigger. Problems go to errors."""
     rule = item["rule"] if isinstance(item.get("rule"), dict) else item   # tolerate a flat answer
     trigger = rule.get("trigger")
-    if trigger not in PARAMS:
+    if trigger not in PARAMETERS:
         errors.append(f"{verb!r}: trigger must be one of {TRIGGERS}, got {trigger!r}")
         return None
     spec: dict[str, Any] = {"trigger": trigger}
-    for name, parameter in PARAMS[trigger].items():
+    for name, parameter in PARAMETERS[trigger].items():
         value = _parameter_value(verb, trigger, rule, parameter, errors)
         if value is not None:
             spec[name] = value
@@ -103,25 +103,26 @@ def _parameter_value(verb: str, trigger: str, rule: dict, parameter: tuple, erro
 
 
 def author_rules(vlm: VLMBackend, task: TaskSpec, variant: str = "easy", demo_summary: str | None = None,
-                 max_tokens: int = 1000, **prompt_kw) -> dict:
+                 max_tokens: int = 1000, **prompt_options) -> dict:
     """One authoring request. Returns {"variant", "rules" (None if unusable), "reasons", "errors", "answer" (the model's
     JSON), "text", "ms", "tokens", "messages"}. A failed call is reported in errors, not raised."""
-    messages = build_messages(task, variant, demo_summary=demo_summary, **prompt_kw)
-    out: dict[str, Any] = {"variant": variant, "rules": None, "reasons": {}, "errors": [], "answer": None, "text": None,
-                           "ms": None, "tokens": None, "messages": messages}
+    messages = build_messages(task, variant, demo_summary=demo_summary, **prompt_options)
+    result: dict[str, Any] = {"variant": variant, "rules": None, "reasons": {}, "errors": [], "answer": None, "text": None,
+                              "ms": None, "tokens": None, "messages": messages}
     try:
         reply = vlm.chat(messages, schema=answer_schema(task), name="history_rules", max_tokens=max_tokens)
     except Exception as error:  # server down, timeout, a JSON the server could not finish
-        out["errors"] = [f"model call failed: {error!r}"]
-        return out
-    out.update(answer=reply.get("json"), text=reply.get("text"), ms=reply.get("ms"),
-               tokens=[reply.get("prompt_tokens"), reply.get("completion_tokens")])
-    out["rules"], out["reasons"], out["errors"] = rules_from_answer(reply.get("json"), task)
-    return out
+        result["errors"] = [f"model call failed: {error!r}"]
+        return result
+    result.update(answer=reply.get("json"), text=reply.get("text"), ms=reply.get("ms"),
+                  tokens=[reply.get("prompt_tokens"), reply.get("completion_tokens")])
+    result["rules"], result["reasons"], result["errors"] = rules_from_answer(reply.get("json"), task)
+    return result
 
 
 # ---------------------------------------------------------------------------------------------------------------- CLI
 def _build_parser() -> argparse.ArgumentParser:
+    """The command line: the task, the variant, the output file, the demonstrations and the model options."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--task", default=None, help="task YAML (default: the packaged reference task)")
     parser.add_argument("--variant", choices=VARIANTS, default="easy")
@@ -171,23 +172,22 @@ def _make_model(args) -> VLMBackend:
 
 
 def main(argv=None) -> int:
+    """Author the rules of a task with the model and write them into a copy of the task file (exit code 1 for an unusable
+    answer)."""
     parser = _build_parser()
     args = parser.parse_args(argv)
-    if args.task:
-        src = pathlib.Path(args.task)
-    else:
-        src = pathlib.Path(__file__).resolve().parents[2] / "tasks" / "red_blue_blocks.yaml"
-    task = TaskSpec.load(src)
+    source = pathlib.Path(args.task) if args.task else TaskSpec.packaged_path("red_blue_blocks")
+    task = TaskSpec.load(source)
     summary = _demo_summary_for(args, task, parser)
     vlm = _make_model(args)
     result = author_rules(vlm, task, args.variant, demo_summary=summary, control_hz=args.control_hz, call_every=args.call_every)
-    for verb, why in result["reasons"].items():
-        print(f"{verb}: {why}")
+    for verb, reason in result["reasons"].items():
+        print(f"{verb}: {reason}")
     if result["rules"] is None:
         print("unusable answer:", "; ".join(result["errors"]), file=sys.stderr)
         return 1
     comment = [f"history.rules written by {args.vlm_model} (author.py, variant {args.variant}); validate before use"]
-    write_task_yaml(src, args.out, result["rules"], comment=comment)
+    write_task_yaml(source, args.out, result["rules"], comment=comment)
     print("\n".join(rules_yaml_lines(result["rules"], "")), f"\nwritten to {args.out}")
     return 0
 

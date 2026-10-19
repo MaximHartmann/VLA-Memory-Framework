@@ -26,6 +26,7 @@ log = logging.getLogger("vla_memory.writers.vlm")
 
 
 def add_model_options(parser: argparse.ArgumentParser):
+    """The planning model's client: the server, the model, the backend and its options."""
     group = parser.add_argument_group("the planning model (--writer vlm)")
     group.add_argument("--vlm-url", default="http://127.0.0.1:8100/v1")
     group.add_argument("--vlm-model", default="Qwen3.8-27B-INT4")
@@ -44,6 +45,7 @@ def add_model_options(parser: argparse.ArgumentParser):
 
 
 def add_planner_options(parser: argparse.ArgumentParser):
+    """The planner's decision rule: the memory store, the gate, the answer form and the switch rule."""
     group = parser.add_argument_group("the planner's decision rule (--writer vlm)")
     group.add_argument("--memory", default=None, help="exemplar store .npz (scripts/build_exemplar_store.py)")
     group.add_argument("--k", type=int, default=4, help="stored examples shown to the planning model per question")
@@ -94,6 +96,7 @@ def build_memory(args, task: TaskSpec, extensions: Sequence[Extension] = ()):
 
 
 def log_planner_configuration(args, store):
+    """One INFO line with the decision rule in effect: the gate, the answer form and the counts."""
     if args.gate and store is not None:
         gate = (f"gate on (the {args.k_vote} nearest stored moments vote; asked from {args.gate_min_done} 'done' vote(s); "
                 f"last skill always asked)")

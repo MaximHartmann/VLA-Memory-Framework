@@ -17,22 +17,22 @@ import numpy as np
 
 def parse_ranges(spec: dict) -> dict:
     """{"0-3": 0, "4-6": 1} -> {0: 0, 1: 0, 2: 0, 3: 0, 4: 1, ...}"""
-    out = {}
+    by_phase = {}
     for key, value in spec.items():
-        lo, _, hi = str(key).partition("-")
-        lo = int(lo)
-        hi = int(hi or lo)
-        for phase in range(lo, hi + 1):
-            out[phase] = int(value)
-    return out
+        first, _, last = str(key).partition("-")
+        first = int(first)
+        last = int(last or first)
+        for phase in range(first, last + 1):
+            by_phase[phase] = int(value)
+    return by_phase
 
 
 def parse_episode_ids(text: str) -> list[int]:
     """The --episodes option of the scripts, "0-19,25,30-31", as the list of episode ids [0, 1, ..., 19, 25, 30, 31]."""
     ids = []
     for part in text.split(","):
-        lo, _, hi = part.partition("-")
-        ids += list(range(int(lo), int(hi or lo) + 1))
+        first, _, last = part.partition("-")
+        ids += list(range(int(first), int(last or first) + 1))
     return ids
 
 
@@ -60,35 +60,37 @@ def _object_state(phase: int, fraction: float, object_phases: dict) -> str:
 
 class PhaseLabeller:
     """Labels of one frame of a recorded demo from its waypoint phase (module docstring); the phase table is the task's
-    `demo_phases`, the gripper state comes from the recorded closedness."""
+    `demo_phases`, the gripper state comes from the recorded closedness (the column state_gripper_index of the state)."""
 
     def __init__(self, task, closed_threshold: float | None = None, state_gripper_index: int = 7):
         phases = task.demo_phases
         self.task = task
         self.phase_to_skill = parse_ranges(phases["phase_to_skill"])
-        self.per_object = {o: dict(v) for o, v in phases["per_object"].items()}
+        self.per_object = {object_name: dict(object_phases) for object_name, object_phases in phases["per_object"].items()}
         self.high = set(phases.get("high_phases", []))
         self.low = set(phases.get("low_phases", []))
         self.rising = set(phases.get("rising_phases", []))
         if closed_threshold is None:
             closed_threshold = task.proprio.get("closed_threshold", 0.3)
-        self.closed = closed_threshold
-        self.gidx = state_gripper_index   # column of the recorded state vector holding the gripper closedness
+        self.closed_threshold = closed_threshold
+        self.gripper_column = state_gripper_index   # column of the recorded state vector holding the gripper closedness
 
-    def __call__(self, ep: dict, i: int) -> dict:
-        phases = np.asarray(ep["phase"]).astype(int)
-        phase = int(phases[i])
+    def __call__(self, episode: dict, frame: int) -> dict:
+        """The labels of one frame: the object states, the gripper, the hand height, the skill index and the phase."""
+        phases = np.asarray(episode["phase"]).astype(int)
+        phase = int(phases[frame])
         run = np.flatnonzero(phases == phase)
-        fraction = (i - run[0]) / max(len(run) - 1, 1)
-        closedness = float(np.asarray(ep["state"])[i, self.gidx])
-        out = {self.task.field(o): _object_state(phase, fraction, p) for o, p in self.per_object.items()}
-        if closedness > self.closed:
+        fraction = (frame - run[0]) / max(len(run) - 1, 1)
+        closedness = float(np.asarray(episode["state"])[frame, self.gripper_column])
+        labels = {self.task.field(object_name): _object_state(phase, fraction, object_phases)
+                  for object_name, object_phases in self.per_object.items()}
+        if closedness > self.closed_threshold:
             gripper = "closed"
         else:
             gripper = "open"
-        out.update(gripper=gripper, gripper_high_above_table=self._hand_is_high(phase, fraction),
-                   subgoal=self.phase_to_skill[phase], phase=phase)
-        return out
+        labels.update(gripper=gripper, gripper_high_above_table=self._hand_is_high(phase, fraction),
+                      subgoal=self.phase_to_skill[phase], phase=phase)
+        return labels
 
     def _hand_is_high(self, phase: int, fraction: float) -> bool:
         """Whether the hand is high above the table: fixed for the high and the low phases; a rising phase becomes high
@@ -104,10 +106,10 @@ class PhaseLabeller:
 
 def load_npz_episodes(demo_dir, episode_ids, camera_names=("exterior", "wrist")):
     """Generator over the reference demo format: episode_NNNN.npz with camera stacks, 'state' and 'phase'."""
-    for ep in episode_ids:
-        z = np.load(pathlib.Path(demo_dir) / f"episode_{ep:04d}.npz")
-        d = {c: z[c] for c in camera_names}
-        d.update(state=z["state"], phase=z["phase"], episode=int(ep))
-        if "instruction" in z.files:
-            d["instruction"] = str(z["instruction"])
-        yield d
+    for episode_id in episode_ids:
+        archive = np.load(pathlib.Path(demo_dir) / f"episode_{episode_id:04d}.npz")
+        episode = {camera: archive[camera] for camera in camera_names}
+        episode.update(state=archive["state"], phase=archive["phase"], episode=int(episode_id))
+        if "instruction" in archive.files:
+            episode["instruction"] = str(archive["instruction"])
+        yield episode

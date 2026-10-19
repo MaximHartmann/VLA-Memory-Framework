@@ -39,16 +39,16 @@ def find_key(tree: dict, key: str):
     return None
 
 
-def pool(x, prefix_mask, text_start: int):
+def pool(residual, prefix_mask, text_start: int):
     """(B, 4, width) float32: the mean over the exterior image's tokens, over the wrist image's tokens and over the valid
     text tokens, and the last valid text token."""
-    x = x.astype(jnp.float32)
+    residual = residual.astype(jnp.float32)
     text_mask = prefix_mask[:, text_start:].astype(jnp.float32)
-    exterior = x[:, 0:IMAGE_TOKENS].mean(1)
-    wrist = x[:, IMAGE_TOKENS:2 * IMAGE_TOKENS].mean(1)
-    text = (x[:, text_start:] * text_mask[..., None]).sum(1) / text_mask.sum(1, keepdims=True)
+    exterior = residual[:, 0:IMAGE_TOKENS].mean(1)
+    wrist = residual[:, IMAGE_TOKENS:2 * IMAGE_TOKENS].mean(1)
+    text = (residual[:, text_start:] * text_mask[..., None]).sum(1) / text_mask.sum(1, keepdims=True)
     last_index = text_start + text_mask.sum(1).astype(jnp.int32) - 1
-    last = jnp.take_along_axis(x, last_index[:, None, None], axis=1)[:, 0]
+    last = jnp.take_along_axis(residual, last_index[:, None, None], axis=1)[:, 0]
     return jnp.stack([exterior, wrist, text, last], axis=1)
 
 
@@ -68,13 +68,15 @@ class LayerFeature:
         block = _gemma.Block(configs=(paligemma, expert))
         text_start = 3 * IMAGE_TOKENS
 
-        def one_block(params, index, x, positions, mask):
-            sliced = jax.tree.map(lambda p: p[index], params)
-            (out, _), _ = block.apply({"params": sliced}, [x, None], None, positions, mask, [None, None], deterministic=True)
-            return out
+        def one_block(params, index, residual, positions, mask):
+            """The residual stream after Gemma block `index`, with that block's parameters sliced out of the stack."""
+            sliced = jax.tree.map(lambda parameter: parameter[index], params)
+            (output, _), _ = block.apply({"params": sliced}, [residual, None], None, positions, mask, [None, None],
+                                         deterministic=True)
+            return output
 
         self._block = jax.jit(one_block)
-        self._pool = jax.jit(lambda x, prefix_mask: pool(x, prefix_mask, text_start))
+        self._pool = jax.jit(lambda residual, prefix_mask: pool(residual, prefix_mask, text_start))
         self._embed_prefix = nnx_utils.module_jit(model.embed_prefix)
 
     def residual(self, stacked: dict):
@@ -83,24 +85,24 @@ class LayerFeature:
         tokens, prefix_mask, autoregressive = self._embed_prefix(observation)
         mask = _pi0.make_attn_mask(prefix_mask, autoregressive)[:, None]
         positions = jnp.cumsum(prefix_mask, axis=1) - 1
-        x = tokens.astype(jnp.bfloat16)
+        residual = tokens.astype(jnp.bfloat16)
         for index in range(self.layer + 1):
-            x = self._block(self.layers_params, index, x, positions, mask)
-        return x, prefix_mask
+            residual = self._block(self.layers_params, index, residual, positions, mask)
+        return residual, prefix_mask
 
     def features(self, inputs: list) -> np.ndarray:
         """(n, width) float32 features of n transformed observations, rounded to float16; computed in batches of `batch`,
         the last one filled up with copies of its last observation."""
-        out = []
+        rows = []
         for start in range(0, len(inputs), self.batch):
             chunk = list(inputs[start:start + self.batch])
             count = len(chunk)
             chunk += [chunk[-1]] * (self.batch - count)
-            stacked = jax.tree.map(lambda *xs: jnp.stack([jnp.asarray(x) for x in xs]), *chunk)
-            x, prefix_mask = self.residual(stacked)
-            pooled = np.asarray(self._pool(x, prefix_mask))
-            out.append(pooled[:count, self.pool_index])
-        return np.concatenate(out).astype(np.float16).astype(np.float32)
+            stacked = jax.tree.map(lambda *leaves: jnp.stack([jnp.asarray(leaf) for leaf in leaves]), *chunk)
+            residual, prefix_mask = self.residual(stacked)
+            pooled = np.asarray(self._pool(residual, prefix_mask))
+            rows.append(pooled[:count, self.pool_index])
+        return np.concatenate(rows).astype(np.float16).astype(np.float32)
 
     def feature(self, inputs: dict) -> np.ndarray:
         """(width,) float32: the feature of one transformed observation, computed as `batch` copies of it."""

@@ -19,30 +19,13 @@ import numpy as np
 
 from ...env_keys import PROPRIO_COLUMNS
 from .grasp_cycle import GraspCycle
-from .rule_spec import SIGNALS, parse_rules
+from .rule_spec import SIGNALS, gripper_thresholds, parse_rules
 from .signal_sequence import SignalSequence
-from .signals import _NAN_ROW, signal_columns
+from .signals import NAN_ROW, column_length, signal_columns, step_count
 
 
-def _column_length(columns: dict) -> int:
-    """How many control steps the signal columns carry (0 without columns)."""
-    if not columns:
-        return 0
-    return len(next(iter(columns.values())))
-
-
-def _step_count(rows, columns: dict) -> int:
-    """How many control steps a call carries; rows and signals must agree when both are given."""
-    signal_steps = _column_length(columns)
-    if len(rows) and signal_steps and len(rows) != signal_steps:
-        raise ValueError(f"{len(rows)} control steps in memory/proprio_steps but {signal_steps} in memory/signal_steps: every step "
-                         f"must appear in both")
-    return max(len(rows), signal_steps)
-
-
-# ---------------------------------------------------------------------------------------------------------------- the writer
 class RuleMonitor:
-    """Drop-in writer for the history-appended prompt with the planner's pointer attributes (plan, idx, done_all,
+    """Drop-in writer for the history-appended prompt with the planner's pointer attributes (plan, skill_index, done_all,
     current_skill). The plan is the task's skill order unless one is given. Gripper thresholds come from the task's
     proprio section (open_width, empty_width, squeeze_force); keyword arguments override them (e.g. squeeze_force=0.5
     for a gripper that reports a grasped flag).
@@ -63,13 +46,13 @@ class RuleMonitor:
         self.task = task
         self.rules = parse_rules(task)
         self.identifier = identifier
-        gripper = self._gripper_thresholds(task, gripper_overrides)
-        lift = self._rule_params("lift")
-        down = self._rule_params("set_down")
-        self.grasp = lift is not None or down is not None   # the grasp cycle runs for a task with grasp verbs only
-        if self.grasp and (lift is None or down is None):
+        gripper = gripper_thresholds(task, **gripper_overrides)
+        lift = self._rule_parameters("lift")
+        set_down = self._rule_parameters("set_down")
+        self.has_grasp_verbs = lift is not None or set_down is not None   # the grasp cycle runs for grasp verbs only
+        if self.has_grasp_verbs and (lift is None or set_down is None):
             raise ValueError("history.rules needs one verb with trigger lift and one with trigger set_down")
-        self.cycle = self._build_grasp_cycle(gripper, lift, down)
+        self.cycle = self._build_grasp_cycle(gripper, lift, set_down)
         self.sequences = self._build_sequences()
         self.signal_names = self._used_signal_names(task)
         self.default_plan = list(plan) if plan else list(task.skills)
@@ -77,38 +60,27 @@ class RuleMonitor:
             task.parse_skill(skill)   # raises for strings outside the vocabulary
         self.reset()
 
-    @staticmethod
-    def _gripper_thresholds(task, overrides: dict) -> dict:
-        """open_width, empty_width, squeeze_force: the defaults, then the task's proprio section, then the overrides."""
-        thresholds = {"open_width": 0.06, "empty_width": 0.015, "squeeze_force": 8.0}
-        proprio = task.proprio or {}
-        for name in ("open_width", "empty_width", "squeeze_force"):
-            if name in proprio:
-                thresholds[name] = proprio[name]
-        thresholds.update(overrides)
-        return thresholds
-
-    def _rule_params(self, trigger: str) -> dict | None:
+    def _rule_parameters(self, trigger: str) -> dict | None:
         """The parameters of the first rule with this trigger, or None if no verb uses it."""
-        for rule_trigger, params in self.rules.values():
+        for rule_trigger, parameters in self.rules.values():
             if rule_trigger == trigger:
-                return params
+                return parameters
         return None
 
-    def _build_grasp_cycle(self, gripper: dict, lift: dict | None, down: dict | None) -> GraspCycle:
+    def _build_grasp_cycle(self, gripper: dict, lift: dict | None, set_down: dict | None) -> GraspCycle:
         """The grasp cycle with the lift and set_down thresholds; a task without grasp verbs gets an idle one that never
         fires."""
-        if not self.grasp:
+        if not self.has_grasp_verbs:
             return GraspCycle(gripper["open_width"], gripper["empty_width"], gripper["squeeze_force"], math.inf, 0.0, math.inf, None)
         return GraspCycle(gripper["open_width"], gripper["empty_width"], gripper["squeeze_force"], lift["rise"],
-                          down["release_below"], down["up"], down.get("away"), lift.get("at_top"))
+                          set_down["release_below"], set_down["up"], set_down.get("away"), lift.get("at_top"))
 
     def _build_sequences(self) -> dict[str, SignalSequence]:
         """One SignalSequence per verb with trigger signals."""
         sequences = {}
-        for verb, (trigger, params) in self.rules.items():
+        for verb, (trigger, parameters) in self.rules.items():
             if trigger == SIGNALS:
-                sequences[verb] = SignalSequence(params["phases"])
+                sequences[verb] = SignalSequence(parameters["phases"])
         return sequences
 
     def _used_signal_names(self, task) -> tuple:
@@ -120,23 +92,25 @@ class RuleMonitor:
         return tuple(name for name in declared if name in used)
 
     def reset(self):
+        """A fresh episode: the default plan, the pointer at its first skill, no events, the state machines at rest."""
         self.plan = list(self.default_plan)
-        self.idx = 0
+        self.skill_index = 0
         self.done_all = False
         self.events: list[tuple] = []
-        self.held_obj = None   # the object the identifier saw at the last lift (None: unknown or no identifier)
+        self.held_object = None   # the object the identifier saw at the last lift (None: unknown or no identifier)
         self.cycle.reset()
         for sequence in self.sequences.values():
             sequence.reset()
 
     @property
     def current_skill(self) -> str:
-        return self.plan[min(self.idx, len(self.plan) - 1)]
+        """The skill the pointer is on (the last one once the plan is complete)."""
+        return self.plan[min(self.skill_index, len(self.plan) - 1)]
 
     @property
     def writer_state(self) -> str:
         """The grasp cycle's state, or, for a task without grasp verbs, the current skill's progress through its phases."""
-        if self.grasp or not self.sequences:
+        if self.has_grasp_verbs or not self.sequences:
             return self.cycle.state
         verb = self.task.parse_skill(self.current_skill)[0]
         if verb in self.sequences:
@@ -144,29 +118,30 @@ class RuleMonitor:
         return self.cycle.state
 
     def start_episode(self, instruction: str = "", episode_id: str = "") -> dict:
+        """Reset for a new episode; the plan record names the task order as the plan's source."""
         self.reset()
         return {"plan": list(self.plan), "source": "task order (rules writer)", "ms": 0.0}
 
     def _bring_forward(self, held: str) -> bool:
         """Another object than planned was picked up: move its pending skills to the front of the remaining plan."""
-        rest = self.plan[self.idx:]
-        mine = [skill for skill in rest if self.task.parse_skill(skill)[1] == held]
-        if not mine or self.rules[self.task.parse_skill(mine[0])[0]][0] != "lift":
+        remaining = self.plan[self.skill_index:]
+        held_skills = [skill for skill in remaining if self.task.parse_skill(skill)[1] == held]
+        if not held_skills or self.rules[self.task.parse_skill(held_skills[0])[0]][0] != "lift":
             return False   # no pending pick of this object
-        others = [skill for skill in rest if self.task.parse_skill(skill)[1] != held]
-        self.plan = self.plan[:self.idx] + mine + others
+        other_skills = [skill for skill in remaining if self.task.parse_skill(skill)[1] != held]
+        self.plan = self.plan[:self.skill_index] + held_skills + other_skills
         return True
 
-    def _write(self, t, done: list):
-        """The current skill is complete at control step t: a line, and the pointer moves on (a new skill's sequence starts
-        afresh)."""
-        done.append(self.plan[self.idx])
-        self.events.append((t, self.plan[self.idx]))
-        if self.idx + 1 >= len(self.plan):
+    def _complete_current_skill(self, control_step, completed: list):
+        """The current skill is complete at this control step: a line, and the pointer moves on (a new skill's sequence
+        starts afresh)."""
+        completed.append(self.plan[self.skill_index])
+        self.events.append((control_step, self.plan[self.skill_index]))
+        if self.skill_index + 1 >= len(self.plan):
             self.done_all = True
-            self.idx = len(self.plan) - 1
+            self.skill_index = len(self.plan) - 1
         else:
-            self.idx += 1
+            self.skill_index += 1
         for sequence in self.sequences.values():
             sequence.reset()
 
@@ -175,22 +150,22 @@ class RuleMonitor:
         decision record. signals: the task's declared signals over the same steps ({name: (n,)}, memory/signal_steps); when
         both are given, rows and signals must have one entry per step each."""
         rows = np.asarray(rows, float).reshape(-1, 5)
-        extra = self._declared_columns(signals)
-        count = _step_count(rows, extra)
-        done: list[str] = []
+        declared = self._declared_columns(signals)
+        count = step_count(rows, declared)
+        completed: list[str] = []
         identified = None
-        for i in range(count):
-            row = rows[i] if len(rows) else _NAN_ROW
-            t = None if step is None else int(step) - count + i
-            if self.grasp:
-                written, identification = self._step_grasp_cycle(row, t, image, done)
+        for offset in range(count):
+            row = rows[offset] if len(rows) else NAN_ROW
+            control_step = None if step is None else int(step) - count + offset
+            if self.has_grasp_verbs:
+                written, identification = self._step_grasp_cycle(row, control_step, image, completed)
                 if identification is not None:
                     identified = identification
                 if written:
                     continue   # one line per control step
-            self._step_signal_sequence(row, extra, i, t, done)
-        return {"advanced": bool(done), "completed": done, "skill_after": self.current_skill, "writer_state": self.writer_state,
-                "plan_complete": self.done_all, "identified": identified}
+            self._step_signal_sequence(row, declared, offset, control_step, completed)
+        return {"advanced": bool(completed), "completed": completed, "skill_after": self.current_skill,
+                "writer_state": self.writer_state, "plan_complete": self.done_all, "identified": identified}
 
     def _declared_columns(self, signals) -> dict:
         """The declared signals the rules read, as columns per step; {} when the rules read none."""
@@ -198,7 +173,7 @@ class RuleMonitor:
             return {}
         return signal_columns(signals, self.signal_names)
 
-    def _step_grasp_cycle(self, row, t, image, done: list) -> tuple[bool, dict | None]:
+    def _step_grasp_cycle(self, row, control_step, image, completed: list) -> tuple[bool, dict | None]:
         """One control step of the grasp cycle: a trigger that completes the current skill writes its line.
         Returns (line written, the identification made at a lift or None)."""
         trigger = self.cycle.step(row[0], row[1], row[2:5])
@@ -206,19 +181,19 @@ class RuleMonitor:
             return False, None
         completes, identification = self._grasp_line(trigger, image)
         if completes:
-            self._write(t, done)
+            self._complete_current_skill(control_step, completed)
         return completes, identification
 
-    def _step_signal_sequence(self, row, extra: dict, i: int, t, done: list) -> None:
+    def _step_signal_sequence(self, row, declared: dict, offset: int, control_step, completed: list) -> None:
         """One control step of the current skill's signal sequence, if its verb has one: the last phase writes the line."""
         if not self.sequences or self.done_all:
             return
-        verb = self.task.parse_skill(self.plan[self.idx])[0]
+        verb = self.task.parse_skill(self.plan[self.skill_index])[0]
         sequence = self.sequences.get(verb)
         if sequence is None:
             return
-        if sequence.step(self._values(row, extra, i)):
-            self._write(t, done)
+        if sequence.step(self._signal_values(row, declared, offset)):
+            self._complete_current_skill(control_step, completed)
 
     def _grasp_line(self, trigger: str, image) -> tuple[bool, dict | None]:
         """Whether a grasp trigger completes the current skill (identifier, reordering and set-down guard of the class
@@ -228,22 +203,22 @@ class RuleMonitor:
             identification, in_plan = self._identify_at_lift(image)
             if not in_plan:
                 return False, identification
-        verb, obj = self.task.parse_skill(self.plan[self.idx])
+        verb, object_name = self.task.parse_skill(self.plan[self.skill_index])
         if self.rules[verb][0] != trigger:
             return False, identification   # e.g. a second lift of a block that slipped out: the pick is already written
         if trigger == "set_down":
-            if self.held_obj is not None and self.held_obj != obj:
+            if self.held_object is not None and self.held_object != object_name:
                 return False, identification   # another object than this place step's was set down: write nothing
-            self.held_obj = None
+            self.held_object = None
         return True, identification
 
     def _identify_at_lift(self, image) -> tuple[dict, bool]:
         """Ask the identifier which object is held; another than planned brings its skills forward. Returns the
         identification record and whether the lift is a step of the plan at all."""
-        verb, expected = self.task.parse_skill(self.plan[self.idx])
+        verb, expected = self.task.parse_skill(self.plan[self.skill_index])
         held = self.identifier.identify(image)
         identification = {"held": held, "expected": expected, "reordered": False}
-        self.held_obj = held
+        self.held_object = held
         if held is None or held == expected:
             return identification, True
         if self.rules[verb][0] != "lift" or not self._bring_forward(held):
@@ -251,35 +226,35 @@ class RuleMonitor:
         identification["reordered"] = True
         return identification, True
 
-    def _values(self, row, extra: dict, i: int) -> dict:
+    def _signal_values(self, row, declared: dict, offset: int) -> dict:
         """Every signal's value at one step: the five columns, the point tip and the declared signals (NaN if not sent)."""
-        now = {}
+        values = {}
         for name, value in zip(PROPRIO_COLUMNS, row):
-            now[name] = float(value)
-        now["tip"] = np.array(row[2:5], float)
+            values[name] = float(value)
+        values["tip"] = np.array(row[2:5], float)
         for name in self.signal_names:
-            if name in extra:
-                now[name] = float(extra[name][i])
+            if name in declared:
+                values[name] = float(declared[name][offset])
             else:
-                now[name] = math.nan
-        return now
+                values[name] = math.nan
+        return values
 
     def completed(self) -> list[str]:
         """The skills completed so far, in order (what the history lists)."""
         if self.done_all:
             return list(self.plan)
-        return list(self.plan[:self.idx])
+        return list(self.plan[:self.skill_index])
 
     def label_rows(self, rows, signals=None) -> np.ndarray:
         """Training labels of a recorded episode: the number of completed skills after each control step (signals: the
         task's declared signals per step, {name: (T,)})."""
         self.reset()
         rows = np.asarray(rows, float).reshape(-1, 5)
-        extra = self._declared_columns(signals)
-        count = max(len(rows), _column_length(extra))
+        declared = self._declared_columns(signals)
+        count = max(len(rows), column_length(declared))
         labels = np.zeros(count, dtype=np.int16)
-        for i in range(count):
-            step_signals = {name: values[i:i + 1] for name, values in extra.items()} or None
-            self.observe_rows(rows[i:i + 1], signals=step_signals)
-            labels[i] = len(self.completed())
+        for offset in range(count):
+            step_signals = {name: values[offset:offset + 1] for name, values in declared.items()} or None
+            self.observe_rows(rows[offset:offset + 1], signals=step_signals)
+            labels[offset] = len(self.completed())
         return labels

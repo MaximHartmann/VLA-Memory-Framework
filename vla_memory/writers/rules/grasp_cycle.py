@@ -32,12 +32,13 @@ class GraspCycle:
         self.reset()
 
     def reset(self):
+        """Back to the free state, with no grasp or release point remembered."""
         self.state = "free"
-        self.z_grasp = None       # fingertip height where the grasp began
-        self.z_rel = None         # fingertip height where the fingers opened after a lift
-        self.p_rel = None         # fingertip position at that release
-        self.pending = False      # a set-down waits for the retreat from the release point
-        self.z_prev = None        # fingertip height at the previous step (for at_top)
+        self.grasp_height = None       # fingertip height where the grasp began
+        self.release_height = None     # fingertip height where the fingers opened after a lift
+        self.release_point = None      # fingertip position at that release
+        self.pending = False           # a set-down waits for the retreat from the release point
+        self.previous_height = None    # fingertip height at the previous step (for at_top)
 
     def step(self, width: float, effort: float, fingertip: Sequence[float]) -> str | None:
         """One control step. Returns "lift", "set_down" or None."""
@@ -52,13 +53,13 @@ class GraspCycle:
             trigger = self._step_lifted(width, height, fingertip)
         elif self.state == "released":
             trigger = self._step_released(width, effort, height, fingertip)
-        self.z_prev = height
+        self.previous_height = height
         return trigger
 
     def _step_free(self, width, effort, height):
         """Waiting for a grasp: the fingers stop on something and squeeze."""
         if self._squeezing(width, effort):
-            self.z_grasp = height
+            self.grasp_height = height
             self.state = "holding"
         return None
 
@@ -80,7 +81,7 @@ class GraspCycle:
     def _step_lifted(self, width, height, fingertip):
         """Carrying: opening less than `release_below` above the grasp point is a set-down, opening higher up a drop."""
         if width >= self.open_width:
-            if height - self.z_grasp < self.release_below:
+            if height - self.grasp_height < self.release_below:
                 self._release_at(height, fingertip)
                 self.pending = True
             else:
@@ -91,12 +92,12 @@ class GraspCycle:
 
     def _step_released(self, width, effort, height, fingertip):
         """Open after a set-down: the retreat fires set_down; squeezing again (a touch) keeps it pending."""
-        if height - self.z_rel >= self.up or self._moved_away(fingertip):
+        if height - self.release_height >= self.up or self._moved_away(fingertip):
             self.state = "free"
             self.pending = False
             return "set_down"
         if self._squeezing(width, effort):
-            self.z_grasp = height
+            self.grasp_height = height
             self.state = "holding"
         return None
 
@@ -106,23 +107,23 @@ class GraspCycle:
 
     def _lift_complete(self, effort, height) -> bool:
         """Still squeezing and `rise` above the grasp point; with at_top, also rising less than at_top per step."""
-        risen = height - self.z_grasp >= self.rise and effort > self.squeeze_force
+        risen = height - self.grasp_height >= self.rise and effort > self.squeeze_force
         if not risen:
             return False
         if self.at_top is None:
             return True
-        return self.z_prev is not None and height - self.z_prev < self.at_top
+        return self.previous_height is not None and height - self.previous_height < self.at_top
 
     def _moved_away(self, fingertip) -> bool:
         """At least `away` from the release point in any direction (only with finite positions)."""
-        if self.away is None or self.p_rel is None:
+        if self.away is None or self.release_point is None:
             return False
-        if not (np.all(np.isfinite(fingertip)) and np.all(np.isfinite(self.p_rel))):
+        if not (np.all(np.isfinite(fingertip)) and np.all(np.isfinite(self.release_point))):
             return False
-        return float(np.linalg.norm(fingertip - self.p_rel)) >= self.away
+        return float(np.linalg.norm(fingertip - self.release_point)) >= self.away
 
     def _release_at(self, height, fingertip):
         """The fingers opened: remember the release point and wait for the retreat."""
-        self.z_rel = height
-        self.p_rel = fingertip
+        self.release_height = height
+        self.release_point = fingertip
         self.state = "released"

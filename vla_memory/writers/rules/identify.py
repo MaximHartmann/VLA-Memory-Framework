@@ -21,12 +21,18 @@ from ...fingerprint import colour_mask
 
 
 class ObjectIdentifier:
+    """The interface: the wrist image at a pick -> the name of the held object."""
+
     def identify(self, image) -> str | None:
         """The task object held in the gripper, or None if it cannot tell."""
         raise NotImplementedError
 
 
 class ColourIdentifier(ObjectIdentifier):
+    """Names the held object by the colour that fills the held-object region of the wrist image. region: (row start, row
+    end, column start, column end) as fractions of the image; min_share: the share of the region a colour must fill;
+    colours: colour rules by object name (defaults: the task file's history and fingerprint sections)."""
+
     def __init__(self, task, region=None, min_share=None, colours=None):
         history = task.history or {}
         colour_rules = colours or (task.fingerprint or {}).get("colours", {})
@@ -36,7 +42,7 @@ class ColourIdentifier(ObjectIdentifier):
         missing = [name for name in task.objects if name not in self.colours]
         if missing:
             raise ValueError(f"ColourIdentifier: no colour rules for object(s) {missing} (task file: fingerprint.colours)")
-        self.region = tuple(region or history.get("held_region", (0.30, 0.60, 0.33, 0.67)))   # row0, row1, col0, col1
+        self.region = tuple(region or history.get("held_region", (0.30, 0.60, 0.33, 0.67)))
         if min_share is None:
             min_share = history.get("held_min_share", 0.25)
         self.min_share = float(min_share)
@@ -46,14 +52,15 @@ class ColourIdentifier(ObjectIdentifier):
         """Share of the held-object region filled by each object's colour."""
         picture = np.asarray(image)
         height, width = picture.shape[:2]
-        row0, row1, col0, col1 = self.region
-        region = picture[int(row0 * height):int(row1 * height), int(col0 * width):int(col1 * width)]
+        row_start, row_end, column_start, column_end = self.region
+        region = picture[int(row_start * height):int(row_end * height), int(column_start * width):int(column_end * width)]
         shares = {}
         for name in self.objects:
             shares[name] = float(colour_mask(region, self.colours[name]).mean())
         return shares
 
     def identify(self, image) -> str | None:
+        """The object whose colour fills the largest share of the region, if that share reaches min_share."""
         shares = self.shares(image)
         best = max(shares, key=shares.get)
         if shares[best] >= self.min_share:
@@ -73,14 +80,14 @@ def make_identifier(task) -> ObjectIdentifier | None:
 
 def validate_identifier(identifier: ObjectIdentifier, samples: Iterable[tuple]) -> dict:
     """samples = (image, true object or None); returns counts of correct, wrong and unknown answers per true object."""
-    out: dict = {}
+    counts_by_object: dict = {}
     for image, truth in samples:
-        got = identifier.identify(image)
-        counts = out.setdefault(str(truth), {"correct": 0, "wrong": 0, "unknown": 0})
-        if got is None:
+        answer = identifier.identify(image)
+        counts = counts_by_object.setdefault(str(truth), {"correct": 0, "wrong": 0, "unknown": 0})
+        if answer is None:
             counts["unknown"] += 1
-        elif got == truth:
+        elif answer == truth:
             counts["correct"] += 1
         else:
             counts["wrong"] += 1
-    return out
+    return counts_by_object

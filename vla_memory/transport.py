@@ -22,23 +22,38 @@ TRANSPORTS: dict[str, Any] = {"openpi": "vla_memory.transport:OpenPIWebsocketTra
 TRANSPORT_ENTRY_POINTS = "vla_memory.transports"
 
 
+def text_of(value):
+    """A string of the wire protocol as str: msgpack may deliver a string the environment sent as bytes."""
+    if isinstance(value, bytes):
+        return value.decode()
+    return value
+
+
 class PolicyTransport:
+    """The interface to a policy server: one observation in, the reply with the actions out."""
+
     def infer(self, observation: dict) -> dict[str, Any]:
+        """The policy's reply to one observation: a dict with "actions" (and whatever else the server returns)."""
         raise NotImplementedError
 
     def metadata(self) -> dict:
+        """What the server reports about itself (empty when it reports nothing)."""
         return {}
 
 
 class OpenPIWebsocketTransport(PolicyTransport):
+    """The openpi serving protocol: msgpack over a websocket, through the openpi client library."""
+
     def __init__(self, host="127.0.0.1", port=8000):
         from openpi_client import websocket_client_policy   # optional dependency
         self.client = websocket_client_policy.WebsocketClientPolicy(host=host, port=port)
 
     def infer(self, observation):
+        """One policy call over the websocket."""
         return self.client.infer(observation)
 
     def metadata(self):
+        """The metadata the openpi server sent when the connection was opened."""
         return self.client.get_server_metadata()
 
 

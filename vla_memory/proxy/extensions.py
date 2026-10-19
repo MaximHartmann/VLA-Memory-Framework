@@ -117,21 +117,21 @@ class Extension:
         """After a question was answered (the record holds the answer and whether the pointer moved)."""
 
     # ------------------------------------------------------------------ the proxy's hooks
-    def start_episode(self, episode: str, ctrl: dict) -> None:
-        """A new episode begins; ctrl: the control keys of its first call."""
+    def start_episode(self, episode: str, control_keys: dict) -> None:
+        """A new episode begins; control_keys: the memory/ keys of its first call, without the prefix."""
 
-    def before_decision(self, ctrl: dict, images: list, planner) -> None:
+    def before_decision(self, control_keys: dict, images: list, planner) -> None:
         """Every call, before the planner decides."""
 
-    def after_decision(self, ctrl: dict, images: list, record: dict, planner) -> None:
+    def after_decision(self, control_keys: dict, images: list, record: dict, planner) -> None:
         """Every call, after the planner decided."""
 
-    def before_policy(self, obs: dict, ctrl: dict, prompt: str, writer) -> dict:
-        """Every call, after the prompt is decided and before the observation goes to the policy. May add keys to `obs`
-        or change obs["prompt"]. Returns fields for the proxy log."""
+    def before_policy(self, observation: dict, control_keys: dict, prompt: str, writer) -> dict:
+        """Every call, after the prompt is decided and before the observation goes to the policy. May add keys to the
+        observation or change its "prompt". Returns fields for the proxy log."""
         return {}
 
-    def on_reply(self, obs: dict, ctrl: dict, reply: dict, skill: str | None, episode: str) -> dict | None:
+    def on_reply(self, observation: dict, control_keys: dict, reply: dict, skill: str | None, episode: str) -> dict | None:
         """After the policy answered. May change `reply` in place. Returns a record for the proxy log, or None."""
         return None
 
@@ -171,8 +171,8 @@ def resolve_extension(spec):
 def build_extensions(classes: Sequence[type], args, task) -> list[Extension]:
     """Build the named extensions in order; each one sees the ones built before it."""
     built: list[Extension] = []
-    for cls in classes:
-        built.append(cls.build(args, task, built))
+    for extension_class in classes:
+        built.append(extension_class.build(args, task, built))
     return built
 
 

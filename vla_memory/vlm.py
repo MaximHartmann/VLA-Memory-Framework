@@ -29,29 +29,30 @@ VLM_ENTRY_POINTS = "vla_memory.vlm_backends"
 API_KEY_ENV = "VLM_API_KEY"
 
 
-def encode_png(img: np.ndarray) -> str:
+def encode_png(image: np.ndarray) -> str:
     """numpy RGB image -> data URL for the chat API."""
     from PIL import Image
-    buf = io.BytesIO()
-    Image.fromarray(np.ascontiguousarray(img)).save(buf, format="PNG")
-    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+    buffer = io.BytesIO()
+    Image.fromarray(np.ascontiguousarray(image)).save(buffer, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode()
 
 
 class VLMBackend:
-    """Interface. chat() returns {"text", "json" (if a schema was given), "ms", "prompt_tokens", "completion_tokens",
+    """The interface. chat() returns {"text", "json" (if a schema was given), "ms", "prompt_tokens", "completion_tokens",
     "reasoning"}; messages follow the OpenAI chat format with image_url content items."""
 
     def chat(self, messages: list[dict], schema: dict | None = None, name: str = "answer",
              max_tokens: int | None = None) -> dict[str, Any]:
+        """One request; `name` names the schema for the server, max_tokens overrides the backend's default."""
         raise NotImplementedError
 
 
 class OpenAICompatibleVLM(VLMBackend):
     """Minimal client for /v1/chat/completions with response_format=json_schema (vLLM's structured output).
 
-    chat_template_kwargs is passed through to the server; the default (None) disables Qwen3's "thinking" mode, which is
-    what we ran. Pass {} for servers that reject unknown fields: then no chat_template_kwargs are sent. api_key is sent as
-    "Authorization: Bearer <key>".
+    chat_template_kwargs is passed through to the server; the default (None) disables Qwen3's "thinking" mode, so that
+    the answer holds no reasoning text. Pass {} for servers that reject unknown fields: then no chat_template_kwargs are
+    sent. api_key is sent as "Authorization: Bearer <key>".
     """
 
     def __init__(self, base_url="http://127.0.0.1:8100/v1", model="Qwen3.8-27B-INT4", timeout=300, temperature=0.0,
@@ -77,12 +78,12 @@ class OpenAICompatibleVLM(VLMBackend):
         message = reply["choices"][0]["message"]
         text = message.get("content") or ""
         usage = reply.get("usage", {})
-        out = {"text": text, "ms": 1000 * (time.perf_counter() - started),
-               "prompt_tokens": usage.get("prompt_tokens"), "completion_tokens": usage.get("completion_tokens"),
-               "reasoning": message.get("reasoning_content") or message.get("reasoning")}
+        answer = {"text": text, "ms": 1000 * (time.perf_counter() - started),
+                  "prompt_tokens": usage.get("prompt_tokens"), "completion_tokens": usage.get("completion_tokens"),
+                  "reasoning": message.get("reasoning_content") or message.get("reasoning")}
         if schema is not None:
-            out["json"] = _parse_answer(text)
-        return out
+            answer["json"] = _parse_answer(text)
+        return answer
 
     def _request_body(self, messages, schema, name, max_tokens) -> dict:
         """The JSON body of one chat request; a schema becomes response_format=json_schema, which the server enforces."""

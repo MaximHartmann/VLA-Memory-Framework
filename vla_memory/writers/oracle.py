@@ -12,16 +12,14 @@ import logging
 from typing import Sequence
 
 from .base import Call, Writer
+from ..transport import text_of
 
 log = logging.getLogger("vla_memory.writers")
 
 
-def text_of(value):
-    """A string that may have arrived as bytes over the wire."""
-    return value.decode() if isinstance(value, bytes) else value
-
-
 class OracleWriter(Writer):
+    """The pointer follows memory/oracle_prompt, the skill the environment's tracker considers current."""
+
     name = "oracle"
     monitor = None                 # the extensions see no monitor: the environment decides
 
@@ -32,23 +30,25 @@ class OracleWriter(Writer):
         self.start_episode("", None)
 
     def start_episode(self, instruction: str, episode_id) -> None:
-        self.idx = 0
+        """Back to the first skill; the oracle has no plan record."""
+        self.skill_index = 0
         self.done_all = False      # the tracker never reports the task as finished
         self.passthrough = None
         return None
 
     @property
     def current_skill(self) -> str:
-        return self.passthrough if self.passthrough is not None else self.plan[self.idx]
+        """The forwarded environment prompt when it is not a skill, else the skill the pointer is on."""
+        return self.passthrough if self.passthrough is not None else self.plan[self.skill_index]
 
     def before_call(self, call: Call, extensions: Sequence = ()) -> dict:
         """The skill the environment's tracker considers current (the instruction when it sends none)."""
-        if "oracle_prompt" not in call.ctrl and not self._warned:
+        if "oracle_prompt" not in call.control_keys and not self._warned:
             log.warning("oracle writer without memory/oracle_prompt: forwarding the instruction")
             self._warned = True
-        reported = text_of(call.ctrl.get("oracle_prompt", call.instruction))
+        reported = text_of(call.control_keys.get("oracle_prompt", call.instruction))
         if reported in self.plan:
-            self.idx = self.plan.index(reported)
+            self.skill_index = self.plan.index(reported)
             self.passthrough = None
         else:
             self.passthrough = reported
@@ -56,6 +56,8 @@ class OracleWriter(Writer):
 
 
 class OffWriter(Writer):
+    """No writer: an empty plan that never advances; the method forwards the instruction."""
+
     name = "off"
     drives_prompt = False
     monitor = None
@@ -63,12 +65,14 @@ class OffWriter(Writer):
     def __init__(self, task):
         self.task = task
         self.plan: list[str] = []
-        self.idx = 0
+        self.skill_index = 0
         self.done_all = False
 
     @property
     def current_skill(self) -> None:
+        """No skill: the policy works on the instruction."""
         return None
 
     def completed(self) -> list[str]:
+        """Nothing is ever completed."""
         return []

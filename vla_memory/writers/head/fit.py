@@ -28,6 +28,7 @@ TOLERANCE = 1e-9          # Newton stops when no parameter moves by more than th
 
 # ---------------------------------------------------------------------- the logistic regression
 def class_weights(y: np.ndarray) -> np.ndarray:
+    """The weight of every row: 0.5 / (number of positives) for a positive, 0.5 / (number of negatives) for a negative."""
     positives = max(1, int(np.sum(y == 1)))
     negatives = max(1, int(np.sum(y == 0)))
     return np.where(y == 1, 0.5 / positives, 0.5 / negatives)
@@ -42,9 +43,9 @@ def objective(design: np.ndarray, y: np.ndarray, weights: np.ndarray, theta: np.
 
 def newton_step(design: np.ndarray, y: np.ndarray, weights: np.ndarray, theta: np.ndarray, penalty: np.ndarray):
     """The Newton step: the gradient solved against the Hessian of the objective."""
-    p = 0.5 * (1.0 + np.tanh(0.5 * (design @ theta)))          # the sigmoid, without overflow
-    gradient = design.T @ (weights * (p - y)) + 2.0 * penalty * theta
-    hessian = (design * (weights * p * (1.0 - p))[:, None]).T @ design + np.diag(2.0 * penalty)
+    probability = 0.5 * (1.0 + np.tanh(0.5 * (design @ theta)))          # the sigmoid, without overflow
+    gradient = design.T @ (weights * (probability - y)) + 2.0 * penalty * theta
+    hessian = (design * (weights * probability * (1.0 - probability))[:, None]).T @ design + np.diag(2.0 * penalty)
     return np.linalg.solve(hessian, gradient)
 
 
@@ -98,12 +99,13 @@ def statistics(X) -> tuple[np.ndarray, np.ndarray]:
 
 
 def zscore(X, mean: np.ndarray, std: np.ndarray) -> np.ndarray:
+    """The rows standardised with the given mean and standard deviation, in float32."""
     return ((np.asarray(X, np.float32) - mean) / std).astype(np.float32)
 
 
 def folds_of(groups, folds: int = FOLDS) -> np.ndarray:
     """The fold of every row: the episodes in sorted order are dealt to the folds in turn."""
-    position = {group: i for i, group in enumerate(sorted(set(groups)))}
+    position = {group: index for index, group in enumerate(sorted(set(groups)))}
     return np.array([position[group] % folds for group in groups])
 
 
@@ -111,43 +113,43 @@ def cross_validate(X, y, groups, l2: float, folds: int = FOLDS) -> tuple[np.ndar
     """The out-of-fold scores (float32) and the AUROC of every fold."""
     fold = folds_of(groups, folds)
     y = np.asarray(y)
-    oof = np.full(len(y), np.nan, np.float32)
+    out_of_fold = np.full(len(y), np.nan, np.float32)
     aurocs = []
-    for f in range(folds):
-        train = fold != f
+    for held_out in range(folds):
+        train = fold != held_out
         mean, std = statistics(X[train])
         w, b = fit_logistic(zscore(X[train], mean, std), y[train], l2)
-        oof[~train] = (zscore(X[~train], mean, std).astype(float) @ w + b).astype(np.float32)
-        aurocs.append(auroc(oof[~train], y[~train]))
-    return oof, aurocs
+        out_of_fold[~train] = (zscore(X[~train], mean, std).astype(float) @ w + b).astype(np.float32)
+        aurocs.append(auroc(out_of_fold[~train], y[~train]))
+    return out_of_fold, aurocs
 
 
-def choose_l2(X, y, groups, l2s=L2_GRID, folds: int = FOLDS) -> tuple[int, list]:
+def choose_l2(X, y, groups, l2_grid=L2_GRID, folds: int = FOLDS) -> tuple[int, list]:
     """The index of the L2 with the best mean out-of-fold AUROC (an exact tie keeps the earlier one) and the table."""
     table = []
-    for l2 in l2s:
-        oof, aurocs = cross_validate(X, y, groups, l2, folds)
-        rounded = [round(a, 5) for a in aurocs]
-        table.append({"l2": l2, "fold_auroc": rounded, "mean_auroc": float(np.mean(aurocs)), "oof": oof})
-    best = max(range(len(l2s)), key=lambda i: (table[i]["mean_auroc"], -i))
+    for l2 in l2_grid:
+        out_of_fold, aurocs = cross_validate(X, y, groups, l2, folds)
+        rounded = [round(value, 5) for value in aurocs]
+        table.append({"l2": l2, "fold_auroc": rounded, "mean_auroc": float(np.mean(aurocs)), "oof": out_of_fold})
+    best = max(range(len(l2_grid)), key=lambda index: (table[index]["mean_auroc"], -index))
     return best, table
 
 
-def fit_head(X, y, groups, l2s=L2_GRID, folds: int = FOLDS, fpr: float = FPR, consecutive: int = 2, layer: int = 12,
+def fit_head(X, y, groups, l2_grid=L2_GRID, folds: int = FOLDS, fpr: float = FPR, consecutive: int = 2, layer: int = 12,
              pool: str = "text") -> tuple[EventHead, dict]:
     """Fit the head on the rows X (n, d), labels y and the episode of every row; returns the head and the report."""
     y = np.asarray(y, int)
-    best, table = choose_l2(X, y, groups, l2s, folds)
-    oof = table[best]["oof"]
-    threshold, allowed = threshold_at(oof[y == 0], fpr)
+    best, table = choose_l2(X, y, groups, l2_grid, folds)
+    out_of_fold = table[best]["oof"]
+    threshold, allowed = threshold_at(out_of_fold[y == 0], fpr)
     mean, std = statistics(X)
-    w, b = fit_logistic(zscore(X, mean, std), y, l2s[best])
+    w, b = fit_logistic(zscore(X, mean, std), y, l2_grid[best])
     head = EventHead(w=w.astype(np.float32), b=np.array([b], np.float32), mean=mean, std=std, threshold=threshold,
-                     consecutive=consecutive, layer=layer, pool=pool, l2=float(l2s[best]))
-    report = {"l2": float(l2s[best]), "threshold": threshold, "N": consecutive, "fpr_max": fpr,
+                     consecutive=consecutive, layer=layer, pool=pool, l2=float(l2_grid[best]))
+    report = {"l2": float(l2_grid[best]), "threshold": threshold, "N": consecutive, "fpr_max": fpr,
               "inner_cv": [{key: value for key, value in row.items() if key != "oof"} for row in table],
-              "threshold_oof": {"negatives": int(np.sum(y == 0)), "at_or_above": int(np.sum(oof[y == 0] >= threshold)),
-                                "allowed": allowed, "recall": float(np.mean(oof[y == 1] >= threshold))},
+              "threshold_oof": {"negatives": int(np.sum(y == 0)), "at_or_above": int(np.sum(out_of_fold[y == 0] >= threshold)),
+                                "allowed": allowed, "recall": float(np.mean(out_of_fold[y == 1] >= threshold))},
               "training": {"episodes": len(set(groups)), "rows": int(len(y)), "positives": int(np.sum(y == 1)),
                            "negatives": int(np.sum(y == 0))}}
     return head, report

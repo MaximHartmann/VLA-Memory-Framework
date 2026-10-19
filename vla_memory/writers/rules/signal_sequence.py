@@ -30,9 +30,9 @@ import numpy as np
 
 from ...env_keys import POINTS, PROPRIO_COLUMNS
 
-ABSOLUTE_OPS = ("above", "below")                 # the value against a threshold
-RELATIVE_OPS = ("rise", "fall", "away", "near")   # the change since a reference phase was entered
-_POINT_OPS = ("away", "near")                     # a position (tip) only takes the distance conditions
+ABSOLUTE_CONDITIONS = ("above", "below")                 # the value against a threshold
+RELATIVE_CONDITIONS = ("rise", "fall", "away", "near")   # the change since a reference phase was entered
+_POINT_CONDITIONS = ("away", "near")                     # a position (tip) only takes the distance conditions
 
 
 def rule_signals(task) -> set:
@@ -48,10 +48,10 @@ def parse_signal_phases(spec: dict, where: str, names: set) -> dict:
     phases = spec.get("phases")
     if unknown or not isinstance(phases, list) or not phases:
         raise ValueError(f"{where}: trigger signals takes `phases`, a non-empty list (unknown: {unknown})")
-    out = []
+    parsed = []
     for number, phase in enumerate(phases, 1):
-        out.append(_parse_phase(phase, f"{where}.phases[{number}]", names, number))
-    return {"phases": out}
+        parsed.append(_parse_phase(phase, f"{where}.phases[{number}]", names, number))
+    return {"phases": parsed}
 
 
 def _parse_phase(phase, where: str, names: set, number: int) -> dict:
@@ -59,23 +59,23 @@ def _parse_phase(phase, where: str, names: set, number: int) -> dict:
     if not isinstance(phase, dict) or "when" not in phase or any(key not in ("when", "hold") for key in phase):
         raise ValueError(f"{where}: a mapping with `when` and optionally `hold` expected, got {phase!r}")
     previous = number - 1 if number > 1 else None   # the first phase has no earlier phase to measure from
-    out = {"when": parse_conditions(phase["when"], f"{where}.when", names, previous, number - 1)}
+    parsed = {"when": parse_conditions(phase["when"], f"{where}.when", names, previous, number - 1)}
     if phase.get("hold") is not None:
-        out["hold"] = parse_conditions(phase["hold"], f"{where}.hold", names, number, number)
-    return out
+        parsed["hold"] = parse_conditions(phase["hold"], f"{where}.hold", names, number, number)
+    return parsed
 
 
-def parse_conditions(spec, where: str, names: set, ref_default: int | None, ref_max: int) -> dict:
-    """One `when` or `hold` mapping {signal: {op: value, [from: k]}} -> the normalised mapping (floats; `from` as given).
-    ref_default: the phase a relative condition measures from unless `from` says otherwise (None: there is none);
-    ref_max: the highest phase number `from` may name."""
+def parse_conditions(spec, where: str, names: set, default_reference: int | None, last_reference: int) -> dict:
+    """One `when` or `hold` mapping {signal: {condition: value, [from: k]}} -> the normalised mapping (floats; `from` as
+    given). default_reference: the phase a relative condition measures from unless `from` says otherwise (None: there is
+    none); last_reference: the highest phase number `from` may name."""
     if not isinstance(spec, dict) or not spec:
         raise ValueError(f"{where}: a non-empty mapping {{signal: {{condition: value}}}} expected, got {spec!r}")
-    out = {}
-    for signal, operations in spec.items():
+    parsed = {}
+    for signal, conditions in spec.items():
         _check_signal_name(signal, names, where)
-        out[signal] = _parse_signal_conditions(signal, operations, where, ref_default, ref_max)
-    return out
+        parsed[signal] = _parse_signal_conditions(signal, conditions, where, default_reference, last_reference)
+    return parsed
 
 
 def _check_signal_name(signal, names: set, where: str) -> None:
@@ -85,31 +85,31 @@ def _check_signal_name(signal, names: set, where: str) -> None:
                          f"of your own under `signals` in the task file)")
 
 
-def _parse_signal_conditions(signal, operations, where: str, ref_default: int | None, ref_max: int) -> dict:
-    """The conditions of one signal -> {op: float, ..., [from: k]}."""
-    if not isinstance(operations, dict) or not operations:
-        raise ValueError(f"{where}.{signal}: a mapping of conditions expected, e.g. {{above: 5.0}}, got {operations!r}")
-    operations = dict(operations)
-    reference = operations.pop("from", None)
-    _check_operations(signal, operations, where)
-    _check_reference(signal, operations, reference, where, ref_default, ref_max)
-    out = {}
-    for op, value in operations.items():
-        out[op] = float(value)
+def _parse_signal_conditions(signal, conditions, where: str, default_reference: int | None, last_reference: int) -> dict:
+    """The conditions of one signal -> {condition: float, ..., [from: k]}."""
+    if not isinstance(conditions, dict) or not conditions:
+        raise ValueError(f"{where}.{signal}: a mapping of conditions expected, e.g. {{above: 5.0}}, got {conditions!r}")
+    conditions = dict(conditions)
+    reference = conditions.pop("from", None)
+    _check_conditions(signal, conditions, where)
+    _check_reference(signal, conditions, reference, where, default_reference, last_reference)
+    parsed = {}
+    for condition, value in conditions.items():
+        parsed[condition] = float(value)
     if reference is not None:
-        out["from"] = reference
-    return out
+        parsed["from"] = reference
+    return parsed
 
 
-def _check_operations(signal, operations: dict, where: str) -> None:
+def _check_conditions(signal, conditions: dict, where: str) -> None:
     """Every condition must be one the signal takes, with a finite number as its value."""
-    allowed = _POINT_OPS if signal in POINTS else ABSOLUTE_OPS + RELATIVE_OPS
-    bad = [op for op in operations if op not in allowed]
-    if bad or not operations:
-        raise ValueError(f"{where}.{signal}: condition(s) {bad or 'none'}; {signal} takes {list(allowed)}")
-    for op, value in operations.items():
+    allowed = _POINT_CONDITIONS if signal in POINTS else ABSOLUTE_CONDITIONS + RELATIVE_CONDITIONS
+    unknown = [condition for condition in conditions if condition not in allowed]
+    if unknown or not conditions:
+        raise ValueError(f"{where}.{signal}: condition(s) {unknown or 'none'}; {signal} takes {list(allowed)}")
+    for condition, value in conditions.items():
         if not _is_number(value):
-            raise ValueError(f"{where}.{signal}.{op}: a number expected, got {value!r}")
+            raise ValueError(f"{where}.{signal}.{condition}: a number expected, got {value!r}")
 
 
 def _is_number(value) -> bool:
@@ -119,16 +119,16 @@ def _is_number(value) -> bool:
     return math.isfinite(value)
 
 
-def _check_reference(signal, operations: dict, reference, where: str, ref_default: int | None, ref_max: int) -> None:
+def _check_reference(signal, conditions: dict, reference, where: str, default_reference: int | None, last_reference: int) -> None:
     """`from: k` is only for relative conditions and must name an earlier phase; without it, the first phase has none."""
-    relative = [op for op in operations if op in RELATIVE_OPS]
+    relative = [condition for condition in conditions if condition in RELATIVE_CONDITIONS]
     if reference is not None:
         if not relative:
-            raise ValueError(f"{where}.{signal}: `from` applies to the relative conditions {list(RELATIVE_OPS)} only")
-        if isinstance(reference, bool) or not isinstance(reference, int) or not 1 <= reference <= ref_max:
-            raise ValueError(f"{where}.{signal}: from must be a phase number from 1 to {ref_max}, got {reference!r}")
+            raise ValueError(f"{where}.{signal}: `from` applies to the relative conditions {list(RELATIVE_CONDITIONS)} only")
+        if isinstance(reference, bool) or not isinstance(reference, int) or not 1 <= reference <= last_reference:
+            raise ValueError(f"{where}.{signal}: from must be a phase number from 1 to {last_reference}, got {reference!r}")
         return
-    if relative and ref_default is None:
+    if relative and default_reference is None:
         raise ValueError(f"{where}.{signal}: {relative} measure from an earlier phase, and the first phase has none")
 
 
@@ -149,55 +149,59 @@ class SignalSequence:
         self.reset()
 
     @staticmethod
-    def _compile(conditions: dict, ref_default: int) -> list:
-        """The conditions as (signal, op, value, reference phase index) tuples; `from: k` (1-based) overrides the default."""
-        out = []
-        for signal, operations in conditions.items():
-            reference = ref_default
-            if "from" in operations:
-                reference = operations["from"] - 1
-            for op, value in operations.items():
-                if op != "from":
-                    out.append((signal, op, value, reference))
-        return out
+    def _compile(conditions: dict, default_reference: int) -> list:
+        """The conditions as (signal, condition, value, reference phase index) tuples; `from: k` (1-based) overrides the
+        default."""
+        compiled = []
+        for signal, signal_conditions in conditions.items():
+            reference = default_reference
+            if "from" in signal_conditions:
+                reference = signal_conditions["from"] - 1
+            for condition, value in signal_conditions.items():
+                if condition != "from":
+                    compiled.append((signal, condition, value, reference))
+        return compiled
 
     def reset(self):
-        self.k = 0                      # phases entered so far
+        """Start over: no phase entered, no anchors."""
+        self.entered = 0                # phases entered so far
         self.anchors: list[dict] = []   # the signals at the step each phase was entered
 
     @property
     def progress(self) -> str:
-        return f"{self.k}/{len(self.phases)}"
+        """The phases entered so far out of all phases, as text ("2/4")."""
+        return f"{self.entered}/{len(self.phases)}"
 
-    def step(self, now: dict) -> bool:
-        """One control step; now: every signal's value at this step (signal -> float; tip -> (3,))."""
-        if self.k and not self._holds(self.phases[self.k - 1][1], now):
+    def step(self, values: dict) -> bool:
+        """One control step; values: every signal's value at this step (signal -> float; tip -> (3,))."""
+        if self.entered and not self._holds(self.phases[self.entered - 1][1], values):
             self.reset()   # a hold condition broke: start over (from the next step)
             return False
-        if not self._holds(self.phases[self.k][0], now):
+        if not self._holds(self.phases[self.entered][0], values):
             return False
-        self.anchors.append(now)
-        self.k += 1
-        if self.k < len(self.phases):
+        self.anchors.append(values)
+        self.entered += 1
+        if self.entered < len(self.phases):
             return False
         self.reset()
         return True
 
-    def _holds(self, conditions: list, now: dict) -> bool:
+    def _holds(self, conditions: list, values: dict) -> bool:
         """Whether every condition holds at this step (a NaN reading never holds)."""
-        for signal, op, value, reference in conditions:
-            if not self._condition_holds(signal, op, value, reference, now):
+        for signal, condition, value, reference in conditions:
+            if not self._condition_holds(signal, condition, value, reference, values):
                 return False
         return True
 
-    def _condition_holds(self, signal, op, value, reference, now: dict) -> bool:
-        current = now[signal]
-        if op in ABSOLUTE_OPS:
-            return _absolute_holds(op, current, value)
+    def _condition_holds(self, signal, condition, value, reference, values: dict) -> bool:
+        """One condition at this step: absolute against its threshold, relative against the anchor of its reference phase."""
+        current = values[signal]
+        if condition in ABSOLUTE_CONDITIONS:
+            return _absolute_holds(condition, current, value)
         anchor = self.anchors[reference][signal]
-        if op in ("rise", "fall"):
-            return _change_holds(op, current, anchor, value)
-        return _distance_holds(op, current, anchor, value)
+        if condition in ("rise", "fall"):
+            return _change_holds(condition, current, anchor, value)
+        return _distance_holds(condition, current, anchor, value)
 
 
 def _signals_used(phases) -> set:
@@ -209,23 +213,23 @@ def _signals_used(phases) -> set:
     return used
 
 
-def _absolute_holds(op: str, current, threshold: float) -> bool:
+def _absolute_holds(condition: str, current, threshold: float) -> bool:
     """above / below: the value against the threshold."""
-    if op == "above":
+    if condition == "above":
         return current > threshold
     return current < threshold
 
 
-def _change_holds(op: str, current, anchor, amount: float) -> bool:
+def _change_holds(condition: str, current, anchor, amount: float) -> bool:
     """rise / fall: the change since the reference phase was entered."""
-    if op == "rise":
+    if condition == "rise":
         return current - anchor >= amount
     return anchor - current >= amount
 
 
-def _distance_holds(op: str, current, anchor, distance: float) -> bool:
+def _distance_holds(condition: str, current, anchor, distance: float) -> bool:
     """away / near: the distance from the position at the reference phase (|x - a| for a scalar)."""
     moved = float(np.linalg.norm(np.subtract(current, anchor)))
-    if op == "away":
+    if condition == "away":
         return moved >= distance
     return moved < distance

@@ -36,15 +36,17 @@ class HeadPolicy:
         self._inputs = None
         transform = policy._input_transform
 
-        def keep(data):                       # an identity: the policy gets exactly what its transform returns
+        def keep(data):
+            """The policy's input transform, with its result kept for the head: the policy gets exactly what it returns."""
             self._inputs = transform(data)
             return self._inputs
 
         policy._input_transform = keep
 
-    def infer(self, obs: dict) -> dict:
+    def infer(self, observation: dict) -> dict:
+        """The policy's reply to one observation, with the head's verdict on that call added as event_head."""
         self._inputs = None
-        outputs = self._policy.infer(obs)
+        outputs = self._policy.infer(observation)
         started = time.perf_counter()
         verdict = self._head.verdict(self._feature.feature(self._inputs))
         verdict["ms"] = 1000 * (time.perf_counter() - started)
@@ -53,13 +55,15 @@ class HeadPolicy:
 
     @property
     def metadata(self) -> dict:
-        meta = dict(self._policy.metadata)
-        meta["event_head"] = {"threshold": self._head.threshold, "N": self._head.consecutive, "layer": self._head.layer,
-                              "pool": self._head.pool, "batch": self._feature.batch, "sha256": self._head.meta.get("sha256")}
-        return meta
+        """The policy's metadata plus the head's threshold, N, layer, pool, batch shape and digests."""
+        metadata = dict(self._policy.metadata)
+        metadata["event_head"] = {"threshold": self._head.threshold, "N": self._head.consecutive, "layer": self._head.layer,
+                                  "pool": self._head.pool, "batch": self._feature.batch, "sha256": self._head.meta.get("sha256")}
+        return metadata
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """The command line: the server's port, the policy's config and checkpoint, the head's directory and the head pass."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--host", default="0.0.0.0")
@@ -88,14 +92,15 @@ def create_policy(args):
     from openpi import transforms
     from openpi.policies import policy_config
     from openpi.training import config as openpi_config
-    extra = [transforms.CenterCropResizeImages(args.center_crop)] if args.center_crop else []
+    extra_transforms = [transforms.CenterCropResizeImages(args.center_crop)] if args.center_crop else []
     train_config = openpi_config.get_config(args.config)
     policy = policy_config.create_trained_policy(train_config, args.checkpoint, default_prompt=args.default_prompt,
-                                                 extra_input_transforms=extra)
+                                                 extra_input_transforms=extra_transforms)
     return policy, train_config
 
 
 def main(argv=None) -> None:
+    """Load the head and the policy, then serve the policy with the head's verdict in every reply."""
     logging.basicConfig(level=logging.INFO, force=True)
     args = build_parser().parse_args(argv)
     if args.jax_cache:

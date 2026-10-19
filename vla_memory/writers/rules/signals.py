@@ -9,29 +9,29 @@ from typing import Sequence
 
 import numpy as np
 
-_NAN_ROW = np.full(5, np.nan)   # the gripper row of a control step that sent no gripper signals
+NAN_ROW = np.full(5, np.nan)   # the gripper row of a control step that sent no gripper signals
 
 
-def signal_rows(ctrl: dict) -> np.ndarray:
+def signal_rows(control_keys: dict) -> np.ndarray:
     """The environment's signals of one policy call as rows (n, 5): width, squeeze, x, y, z.
     memory/proprio_steps carries every control step since the last call; the first call of an episode may only have the
     current values (memory/finger_width, memory/finger_effort, memory/tip_xyz or memory/tip_z)."""
-    steps = ctrl.get("proprio_steps")
+    steps = control_keys.get("proprio_steps")
     if steps is not None and np.size(steps):
         return np.asarray(steps, float).reshape(-1, 5)
-    if "finger_width" not in ctrl:
+    if "finger_width" not in control_keys:
         return np.zeros((0, 5))
-    width = float(ctrl["finger_width"])
-    effort = float(ctrl.get("finger_effort", np.nan))
-    return np.array([[width, effort, *_current_tip(ctrl)]])
+    width = float(control_keys["finger_width"])
+    effort = float(control_keys.get("finger_effort", np.nan))
+    return np.array([[width, effort, *_current_tip(control_keys)]])
 
 
-def _current_tip(ctrl: dict) -> np.ndarray:
+def _current_tip(control_keys: dict) -> np.ndarray:
     """The fingertip position among the current values: tip_xyz, or NaN, NaN, tip_z (NaN when neither is sent)."""
-    tip = ctrl.get("tip_xyz")
+    tip = control_keys.get("tip_xyz")
     if tip is not None:
         return np.asarray(tip, float).reshape(3)
-    return np.array([np.nan, np.nan, float(ctrl.get("tip_z", np.nan))])
+    return np.array([np.nan, np.nan, float(control_keys.get("tip_z", np.nan))])
 
 
 def signal_columns(signals, names: Sequence[str]) -> dict[str, np.ndarray]:
@@ -48,3 +48,19 @@ def signal_columns(signals, names: Sequence[str]) -> dict[str, np.ndarray]:
         lengths = {name: len(values) for name, values in given.items()}
         raise ValueError(f"memory/signal_steps: the signals have different lengths {lengths}")
     return {name: given.get(name, np.full(length, np.nan)) for name in names}
+
+
+def column_length(columns: dict) -> int:
+    """How many control steps the signal columns carry (0 without columns)."""
+    if not columns:
+        return 0
+    return len(next(iter(columns.values())))
+
+
+def step_count(rows, columns: dict) -> int:
+    """How many control steps a call carries; rows and signals must agree when both are given."""
+    signal_steps = column_length(columns)
+    if len(rows) and signal_steps and len(rows) != signal_steps:
+        raise ValueError(f"{len(rows)} control steps in memory/proprio_steps but {signal_steps} in memory/signal_steps: every step "
+                         f"must appear in both")
+    return max(len(rows), signal_steps)

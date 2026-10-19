@@ -17,7 +17,7 @@ import copy
 from typing import Any
 
 from ...task import TaskSpec
-from .author_rules_spec import PARAMS, REASON_MAX, VARIANTS, _cm, gripper_thresholds
+from .author_rules_spec import PARAMETERS, REASON_MAX, VARIANTS, centimetre_text, gripper_thresholds
 from ...methods.history.prompt import HistoryPrompt
 from .rules import TRIGGERS
 
@@ -117,8 +117,8 @@ def _system_text(task: TaskSpec, control_hz, call_every, late_ok_s, gripper_over
     per_s = f" (at {control_hz:g} Hz, 0.1 cm per step is {0.1 * control_hz:g} cm/s)" if control_hz else ""
     late = f" A line that appears up to about {late_ok_s:g} s late costs nothing." if late_ok_s else ""
     force = f"{gripper['squeeze_force']:g} (a force in N, or 0.5 for a grasped flag)"
-    return SYSTEM.format(rate=rate, open_cm=_cm(gripper["open_width"]), empty_cm=_cm(gripper["empty_width"]), force=force,
-                         call=call, per_s=per_s, late=late)
+    return SYSTEM.format(rate=rate, open_cm=centimetre_text(gripper["open_width"]), empty_cm=centimetre_text(gripper["empty_width"]),
+                         force=force, call=call, per_s=per_s, late=late)
 
 
 def _task_text(task: TaskSpec) -> list[str]:
@@ -128,7 +128,7 @@ def _task_text(task: TaskSpec) -> list[str]:
     for verb in task.verbs:
         template = history.events.get(verb, task.skill_template.format(verb=verb, object="{object}"))
         phrases.append(f'"{verb}" -> "{template.format(object="<object>")}"')
-    plan = "; ".join(f"{i + 1}. {skill}" for i, skill in enumerate(task.skills))
+    plan = "; ".join(f"{number}. {skill}" for number, skill in enumerate(task.skills, 1))
     instruction = (task.instruction_examples or ["<instruction>"])[0]
     example = history.render(instruction, list(task.skills[:2]))
     return [f'TASK "{task.name}". Objects: {", ".join(task.objects)}. Verbs: {", ".join(task.verbs)}.',
@@ -153,20 +153,20 @@ def _variant_text(task: TaskSpec, variant: str, demo_summary: str | None, contro
 
 
 def answer_schema(task: TaskSpec) -> dict:
-    """Per verb: a short reason, then the rule: one trigger of the engine with its parameters in cm, within PARAMS' bounds
-    (optional parameters may be null)."""
-    verb = {"type": "object",
-            "properties": {"reason": {"type": "string", "maxLength": REASON_MAX},
-                           "rule": {"anyOf": [_rule_alternative(trigger) for trigger in TRIGGERS]}},
-            "required": ["reason", "rule"], "additionalProperties": False}
-    return {"type": "object", "properties": {v: copy.deepcopy(verb) for v in task.verbs}, "required": list(task.verbs),
-            "additionalProperties": False}
+    """Per verb: a short reason, then the rule: one trigger of the engine with its parameters in cm, within PARAMETERS'
+    bounds (optional parameters may be null)."""
+    verb_schema = {"type": "object",
+                   "properties": {"reason": {"type": "string", "maxLength": REASON_MAX},
+                                  "rule": {"anyOf": [_rule_alternative(trigger) for trigger in TRIGGERS]}},
+                   "required": ["reason", "rule"], "additionalProperties": False}
+    return {"type": "object", "properties": {verb: copy.deepcopy(verb_schema) for verb in task.verbs},
+            "required": list(task.verbs), "additionalProperties": False}
 
 
 def _rule_alternative(trigger: str) -> dict:
-    """The schema of one trigger's rule: the trigger name and its parameters within PARAMS' bounds."""
+    """The schema of one trigger's rule: the trigger name and its parameters within PARAMETERS' bounds."""
     properties: dict[str, Any] = {"trigger": {"type": "string", "enum": [trigger]}}
-    for field, _, low, high, optional in PARAMS[trigger].values():
+    for field, _, low, high, optional in PARAMETERS[trigger].values():
         kind = ["number", "null"] if optional else "number"
         properties[field] = {"type": kind, "minimum": low, "maximum": high}
     return {"type": "object", "properties": properties, "required": list(properties), "additionalProperties": False}

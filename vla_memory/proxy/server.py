@@ -15,6 +15,9 @@ log = logging.getLogger("vla_memory.proxy")
 
 
 class ProxyServer:
+    """The websocket server in front of the relay: every connected client first receives the metadata, then one reply per
+    observation."""
+
     def __init__(self, proxy: Relay, host: str, port: int, metadata: dict):
         self.proxy = proxy
         self.host = host

@@ -24,8 +24,8 @@ from typing import Any, Callable
 
 def key_value(text: str) -> tuple[str, Any]:
     """'KEY=VALUE' -> (KEY, VALUE), the value parsed as JSON when it parses, else the string (the argparse type of the options)."""
-    key, sep, value = text.partition("=")
-    if not sep or not key.strip():
+    key, separator, value = text.partition("=")
+    if not separator or not key.strip():
         raise argparse.ArgumentTypeError(f"expected KEY=VALUE, got {text!r}")
     try:
         return key.strip(), json.loads(value)
@@ -35,20 +35,23 @@ def key_value(text: str) -> tuple[str, Any]:
 
 def import_object(path: str):
     """'module:attribute' (the attribute may be dotted) or 'module.attribute' -> the object."""
-    mod, _, attr = path.partition(":") if ":" in path else path.rpartition(".")
-    if not mod or not attr:
+    if ":" in path:
+        module_name, _, attribute_path = path.partition(":")
+    else:
+        module_name, _, attribute_path = path.rpartition(".")
+    if not module_name or not attribute_path:
         raise ValueError(f"not an import path (module:attribute): {path!r}")
-    obj = importlib.import_module(mod)
-    for part in attr.split("."):
-        obj = getattr(obj, part)
-    return obj
+    target = importlib.import_module(module_name)
+    for attribute in attribute_path.split("."):
+        target = getattr(target, attribute)
+    return target
 
 
 def entry_points(group: str) -> dict:
     """The entry points installed packages declare in `group`, by name (not loaded)."""
     try:
-        from importlib.metadata import entry_points as _eps
-        return {ep.name: ep for ep in _eps(group=group)}
+        from importlib.metadata import entry_points as installed_entry_points
+        return {entry_point.name: entry_point for entry_point in installed_entry_points(group=group)}
     except Exception:   # broken package metadata must not stop the proxy
         return {}
 
@@ -61,30 +64,39 @@ def resolve(spec, registry: dict, group: str, kind: str):
     if spec in registry:
         entry = registry[spec]
         return import_object(entry) if isinstance(entry, str) else entry
-    eps = entry_points(group)
-    if spec in eps:
-        return eps[spec].load()
+    installed = entry_points(group)
+    if spec in installed:
+        return installed[spec].load()
     if ":" in spec or "." in spec:
         try:
             return import_object(spec)
-        except (ImportError, AttributeError, ValueError) as e:
-            raise ValueError(f"{kind} {spec!r}: cannot import it ({e})") from e
-    known = ", ".join(sorted(set(registry) | set(eps)))
+        except (ImportError, AttributeError, ValueError) as error:
+            raise ValueError(f"{kind} {spec!r}: cannot import it ({error})") from error
+    known = ", ".join(sorted(set(registry) | set(installed)))
     raise ValueError(f"unknown {kind} {spec!r} (known: {known}; or an import path module:Class)")
+
+
+def _keyword_parameters(factory: Callable) -> list[str] | None:
+    """The names a factory accepts as keyword arguments; None when it accepts any (it takes **kwargs, or has no signature)."""
+    try:
+        parameters = inspect.signature(factory).parameters
+    except (TypeError, ValueError):   # no signature (a builtin): pass everything
+        return None
+    if any(parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()):
+        return None
+    keyword_kinds = (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+    return [name for name, parameter in parameters.items() if parameter.kind in keyword_kinds]
 
 
 def construct(factory: Callable, standard: dict, options: dict | None = None, kind: str = "component"):
     """factory(**kwargs): the `standard` arguments its signature declares (all of them if it takes **kwargs) and every one of
     `options` (an option the signature does not take is a ValueError naming the ones it takes)."""
     options = dict(options or {})
-    try:
-        params = inspect.signature(factory).parameters
-    except (TypeError, ValueError):   # no signature (a builtin): pass everything
-        params = None
-    if params is None or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+    accepted = _keyword_parameters(factory)
+    if accepted is None:
         return factory(**{**standard, **options})
-    names = [n for n, p in params.items() if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)]
-    unknown = [k for k in options if k not in names]
+    unknown = [name for name in options if name not in accepted]
     if unknown:
-        raise ValueError(f"{kind} takes no option(s) {unknown}; it takes {names}")
-    return factory(**{**{k: v for k, v in standard.items() if k in names}, **options})
+        raise ValueError(f"{kind} takes no option(s) {unknown}; it takes {accepted}")
+    declared_standard = {name: value for name, value in standard.items() if name in accepted}
+    return factory(**{**declared_standard, **options})

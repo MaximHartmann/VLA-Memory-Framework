@@ -22,10 +22,13 @@ log = logging.getLogger("vla_memory.writers")
 
 
 class RulesWriter(RuleMonitor, Writer):
+    """The RuleMonitor behind the writer interface: before_call feeds it the control steps of the call."""
+
     name = "rules"
 
     @classmethod
     def build(cls, args, task, extensions: Sequence = ()):
+        """The writer with the identifier the task file asks for (history.object_from)."""
         return cls(task, identifier=make_identifier(task))
 
     def __init__(self, task, plan=None, identifier=None, **gripper_overrides):
@@ -34,16 +37,16 @@ class RulesWriter(RuleMonitor, Writer):
 
     def before_call(self, call: Call, extensions: Sequence = ()) -> dict:
         """The control steps since the last call (and the wrist image at a pick)."""
-        rows = signal_rows(call.ctrl)
-        record = self.observe_rows(rows, call.step, image=call.wrist(), **self._declared_signals(call.ctrl))
-        return {"advanced": record["advanced"], "skill_index": self.idx, "completed": record["completed"] or None,
+        rows = signal_rows(call.control_keys)
+        record = self.observe_rows(rows, call.step, image=call.wrist(), **self._declared_signals(call.control_keys))
+        return {"advanced": record["advanced"], "skill_index": self.skill_index, "completed": record["completed"] or None,
                 "writer_state": record["writer_state"], "identified": record["identified"]}
 
-    def _declared_signals(self, ctrl: dict) -> dict:
+    def _declared_signals(self, control_keys: dict) -> dict:
         """The task's declared signals (memory/signal_steps) for rules that use them."""
         if not self.signal_names:
             return {}
-        steps = ctrl.get("signal_steps")
+        steps = control_keys.get("signal_steps")
         if steps is None and not self._warned:
             log.warning("rules writer without memory/signal_steps: the rules on %s never fire", ", ".join(self.signal_names))
             self._warned = True

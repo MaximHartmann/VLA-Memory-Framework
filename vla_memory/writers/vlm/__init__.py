@@ -5,6 +5,7 @@ of past episodes, retrieved by fingerprint similarity) as long-term memory. See 
 
   writer.VlmWriter           the writer: --writer vlm and the options of options.py
   planner.Planner            plan once, monitor every call, hysteresis and forward-only pointer
+  plan                       the plan request, the fallback to the task's skill order, the recovery step
   gate                       the memory-vote gate: the store's own verdict, which may settle a call without the model
   question                   the texts of the plan request and the monitor question
   proprio.ProprioSummary     the last few gripper / hand-height readings as one sentence

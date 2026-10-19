@@ -8,6 +8,8 @@ asked: no stored moment is labelled later than the task's last skill, so its vot
 """
 from __future__ import annotations
 
+import time
+
 
 def vote(memory, hits, label: int) -> dict | None:
     """The retrieved moments' verdict on the skill with index `label`: how many say "done", of how many, and the lowest
@@ -25,3 +27,30 @@ def gate_skips(verdict: dict | None, k_vote: int, gate_min_done: int, last_in_pl
     if verdict is None or verdict["of"] < k_vote or verdict["done"] >= gate_min_done:
         return False
     return not last_in_plan and not last_in_task
+
+
+def retrieve_with_gate(planner, pictures, record: dict) -> list:
+    """The stored moments most similar to the pictures, as the planner shows them to the model (its k nearest); with the
+    gate, the k_vote nearest vote first and may settle the call (record["gated"] True, no hits). The record gets the
+    retrieval time (with log_memory), the vote and the examples shown."""
+    memory = planner.memory
+    if memory is None or not len(memory):
+        return []
+    label = planner.current_label()
+    use_gate = planner.gate and planner.k_vote > 0
+    count = max(planner.k, planner.k_vote) if use_gate else planner.k
+    started = time.perf_counter()
+    hits = memory.retrieve(pictures, k=count, exclude_episode=planner.exclude_episode)
+    if planner.log_memory:
+        record["retrieval_ms"] = round(1000 * (time.perf_counter() - started), 3)
+    if use_gate:
+        verdict = vote(memory, hits[:planner.k_vote], label)
+        record["vote"] = verdict
+        last_in_plan = planner.skill_index >= len(planner.plan) - 1
+        last_in_task = label >= len(planner.task.skills) - 1
+        if gate_skips(verdict, planner.k_vote, planner.gate_min_done, last_in_plan, last_in_task):
+            record["gated"] = True
+            return []
+        hits = hits[:planner.k]                 # the model sees the k nearest of them
+    record["exemplars"] = [{"i": index, "sim": round(similarity, 3), **memory.describe_hit(index)} for index, similarity in hits]
+    return hits

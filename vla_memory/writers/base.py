@@ -8,8 +8,8 @@ picture of the moment a skill was completed. Every writer drives every method.
 Timing: a writer decides either before the policy call, from the call's inputs (before_call), so that the prompt of the
 same call shows it, or after it, from the policy's reply (after_call), so that it shows from the next call on.
 
-    Writer       the interface: plan, idx, done_all, current_skill, completed(), start_episode, before_call, after_call,
-                 monitor (what the extensions see)
+    Writer       the interface: plan, skill_index, done_all, current_skill, completed(), start_episode, before_call,
+                 after_call, monitor (what the extensions see)
     Call         what before_call sees of one policy call: the instruction, the control keys, the observation
     WRITERS      registered name -> class or import path; resolve_writer(name) for --writer
 """
@@ -40,22 +40,23 @@ class Call:
     prefix) and the policy's observation; image_keys name the policy's two cameras in the observation."""
 
     instruction: str
-    ctrl: dict
-    obs: dict
+    control_keys: dict
+    observation: dict
     image_keys: tuple = ("observation/image", "observation/wrist_image")
 
     @property
     def step(self) -> int:
-        return int(self.ctrl.get("step", -1))
+        """The environment's step of this call (-1 when it sends none)."""
+        return int(self.control_keys.get("step", -1))
 
     def wrist(self):
         """The raw wrist frame the environment sent, else the policy's own wrist image."""
-        fallback = self.obs.get(self.image_keys[1]) if len(self.image_keys) > 1 else None
-        return self.ctrl.get("wrist_raw", fallback)
+        fallback = self.observation.get(self.image_keys[1]) if len(self.image_keys) > 1 else None
+        return self.control_keys.get("wrist_raw", fallback)
 
     def images(self) -> list:
         """The pictures of this call: the raw frames the environment sent, else the policy's own images."""
-        exterior = self.ctrl.get("exterior_raw", self.obs.get(self.image_keys[0]))
+        exterior = self.control_keys.get("exterior_raw", self.observation.get(self.image_keys[0]))
         images = [np.asarray(exterior)]
         wrist = self.wrist()
         if wrist is not None:
@@ -64,10 +65,11 @@ class Call:
 
 
 class Writer:
-    """The interface of a writer. A subclass keeps plan, idx and done_all up to date and overrides the hook of its timing."""
+    """The interface of a writer. A subclass keeps plan, skill_index and done_all up to date and overrides the hook of its
+    timing (before_call or after_call)."""
 
     name = "writer"
-    drives_prompt = True           # False: the policy gets the instruction as it is (the writer "off")
+    drives_prompt = True             # False: the policy gets the instruction as it is (the writer "off")
     passthrough: str | None = None   # an environment prompt that is not a skill, forwarded as it is (the oracle only)
 
     @classmethod
@@ -87,13 +89,14 @@ class Writer:
 
     @property
     def current_skill(self) -> str | None:
-        return self.plan[min(self.idx, len(self.plan) - 1)]
+        """The skill the pointer is on (the last one once the plan is complete)."""
+        return self.plan[min(self.skill_index, len(self.plan) - 1)]
 
     def completed(self) -> list[str]:
         """The skills completed so far, in order."""
         if self.done_all:
             return list(self.plan)
-        return list(self.plan[:self.idx])
+        return list(self.plan[:self.skill_index])
 
     def start_episode(self, instruction: str, episode_id) -> dict | None:
         """A new episode: reset, and return the plan record (plan, source, ms), or None for a writer without a plan."""

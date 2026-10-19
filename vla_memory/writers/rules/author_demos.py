@@ -20,26 +20,26 @@ _STATE_TEXT = {"holding": "still holding the object", "released": "open again af
 
 def _cycles(rows: np.ndarray, open_width: float, empty_width: float, squeeze_force: float) -> list[dict]:
     """Grasp cycles from the gripper signals alone (no rules): start of the squeeze, end (fingers opened or closed fully)."""
-    out = []
+    cycles = []
     current = None
-    for t, (width, effort) in enumerate(rows[:, :2]):
+    for step, (width, effort) in enumerate(rows[:, :2]):
         if current is None:
             if empty_width < width < open_width and effort > squeeze_force:
-                current = {"grasp": t}
+                current = {"grasp": step}
         elif width >= open_width or width <= empty_width:
-            current["end"] = t
+            current["end"] = step
             current["opened"] = bool(width >= open_width)
-            out.append(current)
+            cycles.append(current)
             current = None
     if current is not None:
-        out.append(current)
-    return out
+        cycles.append(current)
+    return cycles
 
 
-def _cycle_at(cycles: list[dict], t: int) -> dict | None:
-    """The last grasp cycle that began at or before step t."""
+def _cycle_at(cycles: list[dict], step: int) -> dict | None:
+    """The last grasp cycle that began at or before the step."""
     for cycle in reversed(cycles):
-        if cycle["grasp"] <= t:
+        if cycle["grasp"] <= step:
             return cycle
     return None
 
@@ -57,91 +57,91 @@ def demo_event_summary(episodes: Iterable[dict], task: TaskSpec, window: Sequenc
     cap = (task.history or {}).get("max_lines")
     if cap is None:
         cap = len(task.skills)
-    per: dict[int, dict[str, list]] = {}
+    per_line: dict[int, dict[str, list]] = {}
     for episode in episodes:
-        _collect_switches(episode, cap, gripper, window, per)
-    return _summaries(per, task, window)
+        _collect_switches(episode, cap, gripper, window, per_line)
+    return _summaries(per_line, task, window)
 
 
-def _collect_switches(episode: dict, cap: int, gripper: dict, window: Sequence[int], per: dict) -> None:
-    """Add one episode's values at each label switch to the per-line lists (`per`)."""
+def _collect_switches(episode: dict, cap: int, gripper: dict, window: Sequence[int], per_line: dict) -> None:
+    """Add one episode's values at each label switch to the per-line lists."""
     rows = np.asarray(episode["rows"], float)
     reference = np.minimum(np.asarray(episode["reference"], int), cap)
-    z = 100 * rows[:, 4]
-    p = 100 * rows[:, 2:5]
+    heights = 100 * rows[:, 4]
+    positions = 100 * rows[:, 2:5]
     cycles = _cycles(rows, gripper["open_width"], gripper["empty_width"], gripper["squeeze_force"])
-    for k in range(1, int(reference.max(initial=0)) + 1):
-        t = int(np.flatnonzero(reference >= k)[0])
-        stats = per.setdefault(k, {"n": [], "state": []})
-        stats["n"].append(1)
-        around = [t + offset for offset in window]
-        state, values = _switch_statistics(t, cycles, z, p, around)
-        stats["state"].append(state)
+    for line in range(1, int(reference.max(initial=0)) + 1):
+        step = int(np.flatnonzero(reference >= line)[0])
+        collected = per_line.setdefault(line, {"n": [], "state": []})
+        collected["n"].append(1)
+        around = [step + offset for offset in window]
+        state, values = _switch_statistics(step, cycles, heights, positions, around)
+        collected["state"].append(state)
         for key, value in values:
-            stats.setdefault(key, []).append(value)
+            collected.setdefault(key, []).append(value)
 
 
-def _switch_statistics(t: int, cycles: list[dict], z, p, around: list[int]) -> tuple[str, list[tuple]]:
+def _switch_statistics(step: int, cycles: list[dict], heights, positions, around: list[int]) -> tuple[str, list[tuple]]:
     """The gripper's state at a label switch and the statistics of that state (none for no grasp / closed on nothing)."""
-    cycle = _cycle_at(cycles, t)
+    cycle = _cycle_at(cycles, step)
     if cycle is None:
         return "no grasp yet", []
     grasp = cycle["grasp"]
-    if cycle.get("end") is None or cycle["end"] > t:
-        end = cycle.get("end", len(z) - 1)
-        return "holding", _holding_statistics(z, grasp, end, t, around)
+    if cycle.get("end") is None or cycle["end"] > step:
+        end = cycle.get("end", len(heights) - 1)
+        return "holding", _holding_statistics(heights, grasp, end, step, around)
     if cycle["opened"]:
-        return "released", _released_statistics(z, p, grasp, cycle["end"], t, around)
+        return "released", _released_statistics(heights, positions, grasp, cycle["end"], step, around)
     return "closed on nothing", []
 
 
-def _holding_statistics(z, grasp: int, end: int, t: int, around: list[int]) -> list[tuple]:
+def _holding_statistics(heights, grasp: int, end: int, step: int, around: list[int]) -> list[tuple]:
     """Still holding at the switch: the rise above the grasp point, the highest rise of the hold, the upward speed, the
     steps since the grasp, and the course of the rise around the switch."""
-    speed = z[t] - z[t - 1] if t > 0 else 0.0
-    return [("rise", float(z[t] - z[grasp])),
-            ("max_rise", float(z[grasp:end + 1].max() - z[grasp])),
+    speed = heights[step] - heights[step - 1] if step > 0 else 0.0
+    return [("rise", float(heights[step] - heights[grasp])),
+            ("max_rise", float(heights[grasp:end + 1].max() - heights[grasp])),
             ("speed", float(speed)),
-            ("steps_since_grasp", float(t - grasp)),
-            ("rise_around", _course(z, grasp, around))]
+            ("steps_since_grasp", float(step - grasp)),
+            ("rise_around", _course(heights, grasp, around))]
 
 
-def _released_statistics(z, p, grasp: int, release: int, t: int, around: list[int]) -> list[tuple]:
+def _released_statistics(heights, positions, grasp: int, release: int, step: int, around: list[int]) -> list[tuple]:
     """Opened after the grasp: the release height above the grasp point, the rise above and the distance from the release
     point, the steps since the release, and the course of the rise around the switch."""
-    return [("release_height", float(z[release] - z[grasp])),
-            ("up", float(z[t] - z[release])),
-            ("away", float(np.linalg.norm(p[t] - p[release]))),
-            ("steps_since_release", float(t - release)),
-            ("up_around", _course(z, release, around))]
+    return [("release_height", float(heights[release] - heights[grasp])),
+            ("up", float(heights[step] - heights[release])),
+            ("away", float(np.linalg.norm(positions[step] - positions[release]))),
+            ("steps_since_release", float(step - release)),
+            ("up_around", _course(heights, release, around))]
 
 
-def _course(z, origin: int, around: list[int]) -> list:
+def _course(heights, origin: int, around: list[int]) -> list:
     """The height above the origin step at each step of `around` (clamped to the episode)."""
-    last = len(z) - 1
-    return [z[min(max(i, 0), last)] - z[origin] for i in around]
+    last = len(heights) - 1
+    return [heights[min(max(step, 0), last)] - heights[origin] for step in around]
 
 
-def _summaries(per: dict, task: TaskSpec, window: Sequence[int]) -> list[dict]:
+def _summaries(per_line: dict, task: TaskSpec, window: Sequence[int]) -> list[dict]:
     """The collected lists -> one summary per history line: the state counts, min / median / max of each statistic
     (2 decimals) and the median course around the switch (1 decimal)."""
     plan = list(task.skills)
     history = HistoryPrompt(task)
-    out = []
-    for k in sorted(per):
-        stats = per[k]
-        phrase = history.event(plan[k - 1]) if k <= len(plan) else None
-        summary = {"line": k, "phrase": phrase, "n": len(stats["n"]), "states": _state_counts(stats["state"]),
+    summaries = []
+    for line in sorted(per_line):
+        collected = per_line[line]
+        phrase = history.event(plan[line - 1]) if line <= len(plan) else None
+        summary = {"line": line, "phrase": phrase, "n": len(collected["n"]), "states": _state_counts(collected["state"]),
                    "window": list(window)}
-        for key, values in stats.items():
+        for key, values in collected.items():
             if key in ("n", "state"):
                 continue
             if key.endswith("_around"):
                 summary[key] = [round(float(statistics.median(column)), 1) for column in zip(*values)]
             else:
-                summary[key] = [round(float(f(values)), 2) for f in (min, statistics.median, max)]
-        out.append(summary)
-    return out
+                summary[key] = [round(float(statistic(values)), 2) for statistic in (min, statistics.median, max)]
+        summaries.append(summary)
+    return summaries
 
 
 def _state_counts(states: list[str]) -> dict[str, int]:
@@ -162,6 +162,7 @@ def _number_text(value, decimals: int = 1) -> str:
 
 
 def _min_median_max(values, unit: str, decimals: int = 1) -> str:
+    """Three numbers as "min / median / max" with the unit appended."""
     return " / ".join(_number_text(value, decimals) for value in values) + unit
 
 
@@ -185,6 +186,7 @@ def _switch_text(line: dict) -> str:
 
 
 def _holding_text(line: dict) -> list[str]:
+    """The statistics of the switches at which the fingers still held the object."""
     course = ", ".join(f"{offset:+d} steps {_number_text(value)} cm" for offset, value in zip(line["window"], line["rise_around"]))
     return [f"  fingertip rise above the grasp point at the switch: {_min_median_max(line['rise'], ' cm')}",
             f"  highest rise during that hold: {_min_median_max(line['max_rise'], ' cm')}",
@@ -194,6 +196,7 @@ def _holding_text(line: dict) -> list[str]:
 
 
 def _released_text(line: dict) -> list[str]:
+    """The statistics of the switches at which the fingers had opened after a set-down."""
     course = ", ".join(f"{offset:+d} steps {_number_text(value)} cm" for offset, value in zip(line["window"], line["up_around"]))
     return [f"  release height above the grasp point: {_min_median_max(line['release_height'], ' cm')}",
             f"  fingertip rise above the release point at the switch: {_min_median_max(line['up'], ' cm')}",
@@ -202,9 +205,9 @@ def _released_text(line: dict) -> list[str]:
             "  rise above the release point around the switch (median): " + course]
 
 
-def pick_evenly(files: Sequence[str], n: int) -> list[str]:
-    """n files spread evenly over a sorted list (first and last included)."""
+def pick_evenly(files: Sequence[str], count: int) -> list[str]:
+    """`count` files spread evenly over a sorted list (first and last included)."""
     files = sorted(files)
-    if n >= len(files):
+    if count >= len(files):
         return list(files)
-    return [files[int(round(i))] for i in np.linspace(0, len(files) - 1, n)]
+    return [files[int(round(position))] for position in np.linspace(0, len(files) - 1, count)]

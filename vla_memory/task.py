@@ -18,21 +18,25 @@ DEFAULT_MONITOR_FIELDS: dict[str, Any] = {"gripper": ["open", "closed", "unsure"
 _FIELD_TYPES = {"boolean": {"type": "boolean"}, "number": {"type": "number"}}
 
 
-def _load_file(path) -> dict:
+def read_task_file(path) -> dict:
     """The task file as a dict: YAML (needs pyyaml) or JSON, by file suffix."""
     path = pathlib.Path(path)
     text = path.read_text()
     if path.suffix.lower() in (".yaml", ".yml"):
         try:
             import yaml
-        except ImportError as e:  # pragma: no cover
-            raise ImportError("pip install pyyaml to load YAML task files, or use JSON") from e
+        except ImportError as error:  # pragma: no cover
+            raise ImportError("pip install pyyaml to load YAML task files, or use JSON") from error
         return yaml.safe_load(text)
     return json.loads(text)
 
 
 @dataclasses.dataclass
 class TaskSpec:
+    """One task as its file declares it: the objects and verbs, the skill template that combines them into the prompt strings
+    the policy was trained on, a completion rule per verb, the system texts of the planner model, and the sections the
+    writers and methods read (proprio, fingerprint, demo_phases, history, signals, monitor_fields)."""
+
     name: str
     objects: list[str]                      # e.g. ["red", "blue"]
     verbs: list[str]                        # e.g. ["pick up", "place"]; this order is the default plan per object
@@ -62,51 +66,75 @@ class TaskSpec:
     # ------------------------------------------------------------------ construction
     @classmethod
     def load(cls, path) -> "TaskSpec":
-        d = _load_file(path)
-        known = {f.name for f in dataclasses.fields(cls)}
-        return cls(**{k: v for k, v in d.items() if k in known})
+        """The task of a YAML or JSON file."""
+        return cls.from_dict(read_task_file(path))
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "TaskSpec":
+        """The task of a task file's content; keys the dataclass does not know are ignored."""
+        known = {field.name for field in dataclasses.fields(cls)}
+        return cls(**{key: value for key, value in data.items() if key in known})
+
+    @classmethod
+    def load_or_default(cls, path=None) -> "TaskSpec":
+        """The task of a --task option: the file when a path is given, else the packaged reference task."""
+        if path:
+            return cls.load(path)
+        return cls.default()
 
     @classmethod
     def default(cls) -> "TaskSpec":
-        return cls.load(_HERE / "tasks" / "red_blue_blocks.yaml")
+        """The packaged reference task: two cubes, pick and place."""
+        return cls.packaged("red_blue_blocks")
 
     @classmethod
     def packaged(cls, name: str) -> "TaskSpec":
         """A task file shipped with the package (vla_memory/tasks/NAME.yaml), e.g. red_blue_blocks."""
-        return cls.load(_HERE / "tasks" / f"{name}.yaml")
+        return cls.load(cls.packaged_path(name))
+
+    @staticmethod
+    def packaged_path(name: str) -> pathlib.Path:
+        """The path of a task file shipped with the package (vla_memory/tasks/NAME.yaml)."""
+        return _HERE / "tasks" / f"{name}.yaml"
 
     # ------------------------------------------------------------------ skills
     @property
     def skills(self) -> tuple[str, ...]:
         """All legal skill strings, object-major (all verbs of object 1, then object 2, ...)."""
-        return tuple(self.skill(v, o) for o in self.objects for v in self.verbs)
+        return tuple(self.skill(verb, object_name) for object_name in self.objects for verb in self.verbs)
 
-    def skill(self, verb: str, obj: str) -> str:
-        return self.skill_template.format(verb=verb, object=obj)
+    def skill(self, verb: str, object_name: str) -> str:
+        """The exact prompt string of one verb applied to one object: the skill template filled in."""
+        return self.skill_template.format(verb=verb, object=object_name)
 
     def parse_skill(self, skill: str) -> tuple[str, str]:
         """skill string -> (verb, object); raises ValueError for strings outside the vocabulary."""
-        for o in self.objects:
-            for v in self.verbs:
-                if self.skill(v, o) == skill:
-                    return v, o
+        for object_name in self.objects:
+            for verb in self.verbs:
+                if self.skill(verb, object_name) == skill:
+                    return verb, object_name
         raise ValueError(f"unknown skill {skill!r}")
 
-    def field(self, obj: str) -> str:
-        return self.object_field.format(object=obj)
+    def field(self, object_name: str) -> str:
+        """The JSON field of an object's state in the monitor's answer: object_field filled in."""
+        return self.object_field.format(object=object_name)
 
     # ------------------------------------------------------------------ prompts and schemas
     def plan_system_text(self) -> str:
-        return self.plan_system.format(skills="; ".join(f'"{s}"' for s in self.skills))
+        """The system text of the plan request, with the task's skills listed in it."""
+        return self.plan_system.format(skills="; ".join(f'"{skill}"' for skill in self.skills))
 
     def system_text(self, use_wrist: bool) -> str:
+        """The system text of the monitor's question: the head, then the part for one camera or for both."""
         return self.system_head.rstrip() + " " + (self.system_both if use_wrist else self.system_ext).lstrip()
 
     def criterion(self, skill: str) -> str:
-        verb, obj = self.parse_skill(skill)
-        return self.criteria[verb].format(object=obj)
+        """The written completion rule of a skill: the verb's rule with the object filled in."""
+        verb, object_name = self.parse_skill(skill)
+        return self.criteria[verb].format(object=object_name)
 
     def plan_schema(self) -> dict:
+        """The JSON schema of the plan request's answer: a list of 1 to max_plan_len skills of the vocabulary."""
         return {"type": "object",
                 "properties": {"plan": {"type": "array", "items": {"type": "string", "enum": list(self.skills)},
                                         "minItems": 1, "maxItems": self.max_plan_len}},
@@ -128,26 +156,26 @@ class TaskSpec:
         if verdict_only:
             return {"type": "object", "properties": {"current_skill_done": {"type": "boolean"}},
                     "required": ["current_skill_done"], "additionalProperties": False}
-        props = self._object_state_properties()
+        properties = self._object_state_properties()
         for name, kind in self.state_fields().items():
-            if name in props or name in ("reason", "current_skill_done"):
+            if name in properties or name in ("reason", "current_skill_done"):
                 raise ValueError(f"monitor_fields: {name!r} is already a field of the answer")
-            props[name] = _field_schema(name, kind)
+            properties[name] = _field_schema(name, kind)
         if not brief:
-            props["reason"] = {"type": "string", "maxLength": 160}
-        props["current_skill_done"] = {"type": "boolean"}
-        return {"type": "object", "properties": props, "required": list(props), "additionalProperties": False}
+            properties["reason"] = {"type": "string", "maxLength": 160}
+        properties["current_skill_done"] = {"type": "boolean"}
+        return {"type": "object", "properties": properties, "required": list(properties), "additionalProperties": False}
 
     def _object_state_properties(self) -> dict:
         """One string field per object (field()), its enum the task's object states, in the objects' order."""
-        return {self.field(o): {"type": "string", "enum": list(self.object_states)} for o in self.objects}
+        return {self.field(object_name): {"type": "string", "enum": list(self.object_states)} for object_name in self.objects}
 
 
 def _field_schema(name: str, kind) -> dict:
     """The JSON schema of one state field of the monitor's answer: `kind` is a list of strings (an enum), "boolean",
     "number", or a JSON schema taken as it is."""
     if isinstance(kind, (list, tuple)):
-        return {"type": "string", "enum": [str(x) for x in kind]}
+        return {"type": "string", "enum": [str(value) for value in kind]}
     if isinstance(kind, dict):
         return dict(kind)
     if kind in _FIELD_TYPES:

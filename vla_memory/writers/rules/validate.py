@@ -34,12 +34,12 @@ from .rules import RuleMonitor
 SIGNAL_PREFIX = "signal_"       # an episode's array of a declared signal: signal_<name>
 
 
-def episode_signals(ep: dict) -> dict:
+def episode_signals(episode: dict) -> dict:
     """The declared signals of an episode dict or file, {name: (T,)}, from its signal_<name> arrays."""
     signals = {}
-    for key in ep:
+    for key in episode:
         if key.startswith(SIGNAL_PREFIX):
-            signals[key[len(SIGNAL_PREFIX):]] = np.asarray(ep[key])
+            signals[key[len(SIGNAL_PREFIX):]] = np.asarray(episode[key])
     return signals
 
 
@@ -51,7 +51,8 @@ def _first_call(counts: np.ndarray, calls: np.ndarray, line: int) -> int | None:
     return int(calls[hits[0]])
 
 
-def _new_line_statistics() -> dict:
+def _new_line_counts() -> dict:
+    """The empty per-line counts: how the writer's switch to the line compared with the reference's, per episode."""
     return {"both": 0, "same_call": 0, "earlier": 0, "later": 0, "missed": 0, "false": 0, "offsets": []}
 
 
@@ -62,58 +63,58 @@ def validate(task: TaskSpec, episodes: Iterable[dict], call_every: int = 8, **gr
     cap = (task.history or {}).get("max_lines")
     if cap is None:
         cap = len(monitor.plan)
-    n_skills = min(cap, len(monitor.plan))
-    per = {line: _new_line_statistics() for line in range(1, n_skills + 1)}
+    line_count = min(cap, len(monitor.plan))
+    per_line = {line: _new_line_counts() for line in range(1, line_count + 1)}
     calls_equal = 0
     calls_total = 0
-    n_episodes = 0
+    episode_count = 0
     for episode in episodes:
-        equal, calls = _compare_episode(monitor, episode, cap, call_every, per)
+        equal, calls = _compare_episode(monitor, episode, cap, call_every, per_line)
         calls_equal += equal
         calls_total += calls
-        n_episodes += 1
+        episode_count += 1
     lines = {}
-    for line, stats in per.items():
-        lines[monitor.plan[line - 1]] = _line_summary(stats)
-    return {"episodes": n_episodes, "calls": calls_total, "calls_equal": calls_equal,
+    for line, counts in per_line.items():
+        lines[monitor.plan[line - 1]] = _line_summary(counts)
+    return {"episodes": episode_count, "calls": calls_total, "calls_equal": calls_equal,
             "agreement": calls_equal / max(calls_total, 1), "call_every": call_every, "lines": lines}
 
 
-def _compare_episode(monitor: RuleMonitor, episode: dict, cap: int, call_every: int, per: dict) -> tuple[int, int]:
-    """One episode: the writer's counts against the reference at the policy calls; updates the per-line statistics.
+def _compare_episode(monitor: RuleMonitor, episode: dict, cap: int, call_every: int, per_line: dict) -> tuple[int, int]:
+    """One episode: the writer's counts against the reference at the policy calls; updates the per-line counts.
     Returns (calls at which the histories are equal, calls)."""
     rows = np.asarray(episode["rows"], float)
     reference = np.minimum(np.asarray(episode["reference"], int), cap)
     writer = np.minimum(monitor.label_rows(rows, signals=episode_signals(episode) or None), cap)
     calls = np.arange(0, len(writer), max(1, int(call_every)))
-    for line, stats in per.items():
-        _count_switch(stats, _first_call(writer, calls, line), _first_call(reference, calls, line))
+    for line, counts in per_line.items():
+        _count_switch(counts, _first_call(writer, calls, line), _first_call(reference, calls, line))
     return int((writer[calls] == reference[calls]).sum()), len(calls)
 
 
-def _count_switch(stats: dict, writer_call, reference_call) -> None:
+def _count_switch(counts: dict, writer_call, reference_call) -> None:
     """One episode's switch to a line: both (same call, earlier or later), missed (reference only) or false (writer only)."""
     if writer_call is not None and reference_call is not None:
-        stats["both"] += 1
-        stats["offsets"].append(writer_call - reference_call)
+        counts["both"] += 1
+        counts["offsets"].append(writer_call - reference_call)
         if writer_call == reference_call:
-            stats["same_call"] += 1
+            counts["same_call"] += 1
         elif writer_call < reference_call:
-            stats["earlier"] += 1
+            counts["earlier"] += 1
         else:
-            stats["later"] += 1
+            counts["later"] += 1
     elif reference_call is not None:
-        stats["missed"] += 1
+        counts["missed"] += 1
     elif writer_call is not None:
-        stats["false"] += 1
+        counts["false"] += 1
 
 
-def _line_summary(stats: dict) -> dict:
+def _line_summary(counts: dict) -> dict:
     """The per-line result: the counts plus the median and the largest absolute offset (control steps)."""
-    offsets = stats.pop("offsets")
+    offsets = counts.pop("offsets")
     median = statistics.median(offsets) if offsets else None
     largest = max((abs(offset) for offset in offsets), default=None)
-    return {**stats, "median_offset_steps": median, "max_abs_offset_steps": largest}
+    return {**counts, "median_offset_steps": median, "max_abs_offset_steps": largest}
 
 
 def load_episodes(pattern: str):
@@ -127,19 +128,21 @@ def load_episodes(pattern: str):
         yield episode
 
 
-def report(res: dict) -> str:
+def report(result: dict) -> str:
     """The result of validate() as a text table."""
-    out = [f"{res['episodes']} episodes, {res['calls']} calls (every {res['call_every']} steps): history equal to the reference "
-           f"on {res['calls_equal']} ({100 * res['agreement']:.2f} %)",
-           f"{'completed skill':28s} {'both':>5s} {'same call':>9s} {'earlier':>7s} {'later':>5s} {'missed':>6s} {'false':>5s}  median offset"]
-    for skill, s in res["lines"].items():
-        med = "-" if s["median_offset_steps"] is None else f"{s['median_offset_steps']:+.0f} steps"
-        out.append(f"{skill:28s} {s['both']:5d} {s['same_call']:9d} {s['earlier']:7d} {s['later']:5d} {s['missed']:6d} {s['false']:5d}  {med}")
-    return "\n".join(out)
+    lines = [f"{result['episodes']} episodes, {result['calls']} calls (every {result['call_every']} steps): history equal to the "
+             f"reference on {result['calls_equal']} ({100 * result['agreement']:.2f} %)",
+             f"{'completed skill':28s} {'both':>5s} {'same call':>9s} {'earlier':>7s} {'later':>5s} {'missed':>6s} {'false':>5s}  median offset"]
+    for skill, line in result["lines"].items():
+        median_text = "-" if line["median_offset_steps"] is None else f"{line['median_offset_steps']:+.0f} steps"
+        lines.append(f"{skill:28s} {line['both']:5d} {line['same_call']:9d} {line['earlier']:7d} {line['later']:5d} "
+                     f"{line['missed']:6d} {line['false']:5d}  {median_text}")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------------------------------------------- command line
 def main(argv=None) -> int:
+    """Validate the rule set of a task file against recorded episodes and print the table (and write the JSON result)."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--episodes", default=None, help="glob of episode .npz files (rows, reference)")
     parser.add_argument("--task", default=None, help="task YAML/JSON with history.rules (default: the packaged reference task)")
@@ -149,7 +152,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     if not args.episodes:
         parser.error("give --episodes")
-    task = TaskSpec.load(args.task) if args.task else TaskSpec.default()
+    task = TaskSpec.load_or_default(args.task)
     overrides = {} if args.squeeze_force is None else {"squeeze_force": args.squeeze_force}
     result = validate(task, load_episodes(args.episodes), args.call_every, **overrides)
     print(report(result))

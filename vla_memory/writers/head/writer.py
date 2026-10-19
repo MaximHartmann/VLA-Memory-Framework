@@ -28,12 +28,14 @@ class HeadWriter(Writer):
 
     @classmethod
     def add_arguments(cls, parser):
+        """--consecutive: the verdicts in a row that write a line."""
         group = parser.add_argument_group("the event head (--writer head)")
         group.add_argument("--consecutive", type=int, default=2,
                            help="consecutive 'done' verdicts of the event head that write a line (default 2)")
 
     @classmethod
     def build(cls, args, task, extensions: Sequence = ()):
+        """The writer with --consecutive and the history method's --max-lines (when that method is chosen)."""
         return cls(task, consecutive=args.consecutive, max_lines=getattr(args, "max_lines", None))
 
     def __init__(self, task, consecutive: int = 2, max_lines: int | None = None, plan: Sequence[str] | None = None):
@@ -48,8 +50,9 @@ class HeadWriter(Writer):
         self.start_episode()
 
     def start_episode(self, instruction: str = "", episode_id=None) -> dict:
+        """Back to the first skill; the plan record names the task order as the plan's source."""
         self.plan = list(self.default_plan)
-        self.idx = 0                  # the lines written, and so the index of the current skill
+        self.skill_index = 0          # the lines written, and so the index of the current skill
         self.counter = 0              # consecutive "done" verdicts on the current skill
         self.done_all = False         # never true: the last skill has no line
         self.unshown = False          # a line was written after the last reply and is not in a prompt yet
@@ -58,12 +61,12 @@ class HeadWriter(Writer):
     @property
     def writing(self) -> bool:
         """Whether another line can still be written."""
-        return self.idx < min(self.max_lines, len(self.plan) - 1)
+        return self.skill_index < min(self.max_lines, len(self.plan) - 1)
 
     def before_call(self, call: Call, extensions: Sequence = ()) -> dict:
         """A new policy call: a line written after the last reply goes into this call's prompt. Returns the call's log
         fields."""
-        fields = {"advanced": self.unshown, "skill_index": self.idx}
+        fields = {"advanced": self.unshown, "skill_index": self.skill_index}
         self.unshown = False
         return fields
 
@@ -82,8 +85,8 @@ class HeadWriter(Writer):
             self.counter = 0
         if self.counter < self.consecutive:
             return None
-        skill = self.plan[self.idx]
-        self.idx += 1
+        skill = self.plan[self.skill_index]
+        self.skill_index += 1
         self.counter = 0
         self.unshown = True
         return skill

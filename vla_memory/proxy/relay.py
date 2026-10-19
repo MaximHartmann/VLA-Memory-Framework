@@ -28,32 +28,30 @@ import time
 from typing import Sequence
 
 from .extensions import Extension, collect
+from ..env_keys import CONTROL_PREFIX
 from ..task import TaskSpec
-from ..transport import PolicyTransport
+from ..transport import PolicyTransport, text_of
 from ..writers.base import Call
 
 log = logging.getLogger("vla_memory.proxy")
-CTRL = "memory/"
 
 
 def split_control_keys(observation: dict) -> tuple[dict, dict]:
     """The memory/ control keys without their prefix, and the observation without them."""
-    ctrl = {}
-    policy_obs = {}
+    control_keys = {}
+    policy_observation = {}
     for key, value in observation.items():
-        if isinstance(key, str) and key.startswith(CTRL):
-            ctrl[key[len(CTRL):]] = value
+        if isinstance(key, str) and key.startswith(CONTROL_PREFIX):
+            control_keys[key[len(CONTROL_PREFIX):]] = value
         else:
-            policy_obs[key] = value
-    return ctrl, policy_obs
-
-
-def text_of(value):
-    """A string that may have arrived as bytes over the wire."""
-    return value.decode() if isinstance(value, bytes) else value
+            policy_observation[key] = value
+    return control_keys, policy_observation
 
 
 class Relay:
+    """One writer, one method and the extensions around a policy transport; infer() relays one policy call (module
+    docstring). log_path: the proxy's log, one JSON record per call, appended."""
+
     def __init__(self, transport: PolicyTransport, writer, method, log_path=None,
                  image_keys=("observation/image", "observation/wrist_image"), task: TaskSpec | None = None,
                  extensions: Sequence[Extension] = ()):
@@ -65,7 +63,7 @@ class Relay:
         self.extensions = list(extensions)
         self.episode = None
         self.episode_count = 0
-        self._log = open(log_path, "a") if log_path else None
+        self._log_file = open(log_path, "a") if log_path else None
         log.info("upstream metadata: %s", transport.metadata())
 
     @property
@@ -77,44 +75,52 @@ class Relay:
     def infer(self, observation: dict) -> dict:
         """Relay one policy call: decide the prompt, forward the observation, return the reply with the `planner` info."""
         started = time.perf_counter()
-        ctrl, obs = split_control_keys(observation)
-        instruction = text_of(obs.get("prompt", ""))
+        control_keys, observation = split_control_keys(observation)
+        instruction = text_of(observation.get("prompt", ""))
         info = {"mode": self.writer.name, "queried": False, "advanced": False, "vlm_ms": 0.0}
-        if self._is_new_episode(ctrl):
-            self._begin_episode(ctrl, instruction, info)
-        info.update(self.writer.before_call(Call(instruction, ctrl, obs, self.image_keys), self.extensions))
-        prompt = self.method.prompt(instruction, self.writer) if self.writer.drives_prompt else instruction
-        info.update(collect(self.extensions, "log_fields"))
-        obs["prompt"] = prompt
-        info.update(self.method.before_policy(obs, ctrl, self.writer))
-        for extension in self.extensions:
-            info.update(extension.before_policy(obs, ctrl, prompt, self.writer.monitor))
-        info["prompt"] = obs["prompt"]
-        info["oracle_prompt"] = ctrl.get("oracle_prompt")
-        reply = self._forward(obs, info)
-        self._reply_hooks(obs, ctrl, reply, prompt, info)
+        if self._is_new_episode(control_keys):
+            self._begin_episode(control_keys, instruction, info)
+        call = Call(instruction, control_keys, observation, self.image_keys)
+        info.update(self.writer.before_call(call, self.extensions))
+        prompt = self._decide_prompt(instruction, observation, control_keys, info)
+        reply = self._forward(observation, info)
+        self._reply_hooks(observation, control_keys, reply, prompt, info)
         info.update(self.writer.after_call(reply))
         info["total_ms"] = 1000 * (time.perf_counter() - started)
         reply["planner"] = info
-        self._log_call(ctrl, info)
+        self._log_call(control_keys, info)
         return reply
 
+    def _decide_prompt(self, instruction: str, observation: dict, control_keys: dict, info: dict) -> str:
+        """Set the observation's prompt from the writer's state, then let the method and the extensions add their keys.
+        Returns the prompt as the method decided it (an extension may still change the observation's prompt)."""
+        prompt = self.method.prompt(instruction, self.writer) if self.writer.drives_prompt else instruction
+        info.update(collect(self.extensions, "log_fields"))
+        observation["prompt"] = prompt
+        info.update(self.method.before_policy(observation, control_keys, self.writer))
+        for extension in self.extensions:
+            info.update(extension.before_policy(observation, control_keys, prompt, self.writer.monitor))
+        info["prompt"] = observation["prompt"]
+        info["oracle_prompt"] = control_keys.get("oracle_prompt")
+        return prompt
+
     # ------------------------------------------------------------------ episodes
-    def _is_new_episode(self, ctrl: dict) -> bool:
-        episode_id = text_of(ctrl.get("episode"))
-        if ctrl.get("new_episode") or self.episode is None:
+    def _is_new_episode(self, control_keys: dict) -> bool:
+        """Whether this call starts an episode: the first call, memory/new_episode, or a changed episode id."""
+        episode_id = text_of(control_keys.get("episode"))
+        if control_keys.get("new_episode") or self.episode is None:
             return True
         return episode_id is not None and str(episode_id) != self.episode
 
-    def _begin_episode(self, ctrl: dict, instruction: str, info: dict):
+    def _begin_episode(self, control_keys: dict, instruction: str, info: dict):
         """Close the episode that just ended, name the new one, and let the writer plan it."""
         self._end_episode()
-        episode_id = text_of(ctrl.get("episode"))
+        episode_id = text_of(control_keys.get("episode"))
         self.episode = str(episode_id) if episode_id is not None else f"ep{self.episode_count}"
         self.episode_count += 1
         for extension in self.extensions:
-            extension.start_episode(self.episode, ctrl)
-        self.method.start_episode(self.episode, ctrl)
+            extension.start_episode(self.episode, control_keys)
+        self.method.start_episode(self.episode, control_keys)
         record = self.writer.start_episode(instruction, self.episode)
         if record is not None:
             info.update(plan=record["plan"], plan_source=record["source"], plan_ms=record.get("ms"))
@@ -128,22 +134,24 @@ class Relay:
                 self._log_event(record)
 
     def _log_event(self, record: dict):
+        """Write a record to the writer's own log, when the writer keeps one."""
         log_event = getattr(self.writer.monitor, "log_event", None)
         if log_event is not None:
             log_event(record)
 
     # ------------------------------------------------------------------ the policy's reply
-    def _forward(self, obs: dict, info: dict) -> dict:
+    def _forward(self, observation: dict, info: dict) -> dict:
+        """The policy's reply to the observation; the round trip goes into the info as upstream_ms."""
         started = time.perf_counter()
-        reply = self.transport.infer(obs)
+        reply = self.transport.infer(observation)
         info["upstream_ms"] = 1000 * (time.perf_counter() - started)
         return reply
 
-    def _reply_hooks(self, obs: dict, ctrl: dict, reply: dict, prompt: str, info: dict):
+    def _reply_hooks(self, observation: dict, control_keys: dict, reply: dict, prompt: str, info: dict):
         """Extensions that look at (or change) the policy's reply; each one's record goes into the info."""
         skill = self.current_skill(prompt)
         for extension in self.extensions:
-            record = extension.on_reply(obs, ctrl, reply, skill, self.episode)
+            record = extension.on_reply(observation, control_keys, reply, skill, self.episode)
             if record is not None:
                 info[extension.name] = record
 
@@ -156,13 +164,14 @@ class Relay:
         monitor = self.writer.monitor
         plan = getattr(monitor, "plan", None)
         if plan:
-            return plan[min(getattr(monitor, "idx", 0), len(plan) - 1)]
+            return plan[min(getattr(monitor, "skill_index", 0), len(plan) - 1)]
         return None
 
-    def _log_call(self, ctrl: dict, info: dict):
-        if self._log:
-            self._log.write(json.dumps({"episode": self.episode, "step": ctrl.get("step"), **info}, default=str) + "\n")
-            self._log.flush()
+    def _log_call(self, control_keys: dict, info: dict):
+        """One JSON record per call: the episode, the step and the info."""
+        if self._log_file:
+            self._log_file.write(json.dumps({"episode": self.episode, "step": control_keys.get("step"), **info}, default=str) + "\n")
+            self._log_file.flush()
 
     def close(self):
         """End of the run: the extensions take the last episode and release their files; the log is closed."""
@@ -170,6 +179,6 @@ class Relay:
         for extension in self.extensions:
             extension.close()
         self.method.close()
-        if self._log:
-            self._log.close()
-            self._log = None
+        if self._log_file:
+            self._log_file.close()
+            self._log_file = None

@@ -21,34 +21,34 @@ WINDOW = 24       # positives: the first 24 frames after a boundary
 
 def boundaries(reference, count: int) -> list:
     """b_1 .. b_count: the first frame at which the reference has reached k (None if it never does)."""
-    h = np.asarray(reference)
-    out = []
+    reference = np.asarray(reference)
+    edges = []
     for k in range(1, count + 1):
-        hits = np.flatnonzero(h >= k)
-        out.append(int(hits[0]) if len(hits) else None)
-    return out
+        hits = np.flatnonzero(reference >= k)
+        edges.append(int(hits[0]) if len(hits) else None)
+    return edges
 
 
 def completed(edges: list, frames: int) -> np.ndarray:
     """(frames,) int: how many of the boundaries lie at or before each frame (a history only grows)."""
-    h = np.zeros(frames, int)
+    count = np.zeros(frames, int)
     for edge in edges:
         if edge is not None:
-            h[edge:] += 1
-    return h
+            count[edge:] += 1
+    return count
 
 
 def probe_rows(reference, k_max: int = 2, grid: int = GRID, window: int = WINDOW) -> list[tuple[int, int, int]]:
     """The rows of one episode as (frame, k, label), sorted by frame and k."""
     edges = boundaries(reference, k_max + 1)
-    h = completed(edges, len(reference))
+    history_count = completed(edges, len(reference))
     rows = {}
-    for frame in range(0, len(h), grid):
-        if h[frame] <= k_max:
-            rows[(frame, int(h[frame]))] = 0
+    for frame in range(0, len(history_count), grid):
+        if history_count[frame] <= k_max:
+            rows[(frame, int(history_count[frame]))] = 0
         for k, edge in enumerate(edges):
             if edge is not None and edge <= frame < edge + window:
-                rows[(frame, k)] = int(h[frame] > k)
+                rows[(frame, k)] = int(history_count[frame] > k)
     return [(frame, k, label) for (frame, k), label in sorted(rows.items())]
 
 

@@ -48,6 +48,7 @@ DEFAULT_METHOD = "subgoal"
 
 # ---------------------------------------------------------------------- the options
 def add_connection_options(parser: argparse.ArgumentParser):
+    """The ports, the transport to the policy and the log file."""
     parser.add_argument("--listen-port", type=int, required=True)
     parser.add_argument("--listen-host", default="127.0.0.1")
     parser.add_argument("--upstream-port", type=int, default=None,
@@ -76,55 +77,51 @@ def add_choice_options(parser: argparse.ArgumentParser):
 
 
 def add_task_options(parser: argparse.ArgumentParser):
+    """The task file and the observation keys of the policy's cameras."""
     parser.add_argument("--task", default=None, help="task YAML/JSON (default: the packaged red_blue_blocks task)")
     parser.add_argument("--image-keys", nargs="+", default=["observation/image", "observation/wrist_image"],
                         help="observation keys of the camera images used when memory/*_raw frames are not sent")
 
 
-def build_parser(writer_cls, method_cls, extension_classes: Sequence[type] = ()) -> argparse.ArgumentParser:
+def build_parser(writer_class, method_class, extension_classes: Sequence[type] = ()) -> argparse.ArgumentParser:
     """The command line with the options of the chosen writer, method and extensions."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_connection_options(parser)
     add_task_options(parser)
     add_choice_options(parser)
-    writer_cls.add_arguments(parser)
-    method_cls.add_arguments(parser)
-    for extension_cls in extension_classes:
-        extension_cls.add_arguments(parser)
+    writer_class.add_arguments(parser)
+    method_class.add_arguments(parser)
+    for extension_class in extension_classes:
+        extension_class.add_arguments(parser)
     return parser
 
 
-def chosen(argv) -> argparse.Namespace:
+def parse_choices(argv) -> argparse.Namespace:
     """--writer, --method and --with, read before the full parse."""
-    pre_parser = argparse.ArgumentParser(add_help=False)
-    add_choice_options(pre_parser)
-    known, _ = pre_parser.parse_known_args(argv)
-    return known
-
-
-def extension_names(argv) -> list[str]:
-    """The --with values, read before the full parse."""
-    return chosen(argv).extensions
+    choice_parser = argparse.ArgumentParser(add_help=False)
+    add_choice_options(choice_parser)
+    choices, _ = choice_parser.parse_known_args(argv)
+    return choices
 
 
 def parse_command_line(argv=None):
     """Parse in two passes: the choices first, then everything. Returns (parser, args, extension classes); the writer's
     and the method's classes are resolve_writer(args.writer) and resolve_method(args.method)."""
-    choice = chosen(argv)
+    choices = parse_choices(argv)
     try:
-        writer_cls = resolve_writer(choice.writer)
-        method_cls = resolve_method(choice.method)
-        classes = [resolve_extension(name) for name in choice.extensions]
+        writer_class = resolve_writer(choices.writer)
+        method_class = resolve_method(choices.method)
+        extension_classes = [resolve_extension(name) for name in choices.extensions]
     except ValueError as error:
         parser = argparse.ArgumentParser()
         add_connection_options(parser)
         parser.error(str(error))
-    parser = build_parser(writer_cls, method_cls, classes)
-    return parser, parser.parse_args(argv), classes
+    parser = build_parser(writer_class, method_class, extension_classes)
+    return parser, parser.parse_args(argv), extension_classes
 
 
 def check_arguments(parser: argparse.ArgumentParser, args):
-    """Usage errors before anything is built."""
+    """Usage errors before anything is built: the openpi transport needs --upstream-port, another must be resolvable."""
     transport = args.transport or "openpi"
     if transport == "openpi" and args.upstream_port is None:
         parser.error("the following arguments are required: --upstream-port")
@@ -136,10 +133,6 @@ def check_arguments(parser: argparse.ArgumentParser, args):
 
 
 # ---------------------------------------------------------------------- the builders
-def load_task(path) -> TaskSpec:
-    return TaskSpec.load(path) if path else TaskSpec.default()
-
-
 def build_transport(args) -> PolicyTransport:
     """The connection to the policy of --transport with host and port (if set) as far as its constructor takes them, and
     --transport-arg."""
@@ -163,34 +156,35 @@ def build_components(args, task: TaskSpec, extension_classes) -> tuple:
     return extensions, writer, method
 
 
-def component_meta(args) -> dict:
+def component_metadata(args) -> dict:
     """The metadata's entries for components other than the defaults (none for the defaults)."""
-    meta = {}
+    metadata = {}
     if (getattr(args, "vlm_backend", None) or "openai") != "openai":
-        meta["vlm_backend"] = args.vlm_backend
+        metadata["vlm_backend"] = args.vlm_backend
     if (args.transport or "openpi") != "openpi":
-        meta["transport"] = args.transport
-    return meta
+        metadata["transport"] = args.transport
+    return metadata
 
 
 def proxy_metadata(args, task: TaskSpec, writer, method, extensions: Sequence[Extension]) -> dict:
     """What the environment client is told about the proxy when it connects."""
-    meta = {"proxy": Relay.__module__, "mode": writer.name, "method": method.name, "task": task.name,
-            "vlm": getattr(args, "vlm_model", None) if writer.name == "vlm" else None,
-            "memory": getattr(args, "memory", None), "k": getattr(args, "k", None)}
-    meta.update(component_meta(args))
-    meta.update(method.metadata())
+    metadata = {"proxy": Relay.__module__, "mode": writer.name, "method": method.name, "task": task.name,
+                "vlm": getattr(args, "vlm_model", None) if writer.name == "vlm" else None,
+                "memory": getattr(args, "memory", None), "k": getattr(args, "k", None)}
+    metadata.update(component_metadata(args))
+    metadata.update(method.metadata())
     for extension in extensions:
-        meta.update(extension.metadata())
-    return meta
+        metadata.update(extension.metadata())
+    return metadata
 
 
 # ---------------------------------------------------------------------- running
 def main(argv=None):
+    """Parse the command line, build the components and serve until the process is stopped."""
     parser, args, extension_classes = parse_command_line(argv)
     check_arguments(parser, args)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    task = load_task(args.task)
+    task = TaskSpec.load_or_default(args.task)
     try:
         extensions, writer, method = build_components(args, task, extension_classes)
     except ValueError as error:
@@ -212,7 +206,8 @@ def serve(relay: Relay, host: str, port: int, metadata: dict):
         relay.close()
 
 
-def _exit_on_sigterm(signum, frame):
+def _exit_on_sigterm(signal_number, frame):
+    """Turn SIGTERM into a SystemExit, so that serve() closes the relay like after Ctrl-C."""
     raise SystemExit(0)
 
 

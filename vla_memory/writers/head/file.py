@@ -40,8 +40,8 @@ class EventHead:
 
     def scores(self, features) -> np.ndarray:
         """(n,) float32: the scores of n feature vectors (n, d)."""
-        z = ((np.asarray(features, np.float32) - self.mean) / self.std).astype(np.float32)
-        return z @ self.w + self.b
+        standardised = ((np.asarray(features, np.float32) - self.mean) / self.std).astype(np.float32)
+        return standardised @ self.w + self.b
 
     def score(self, feature) -> float:
         """The score of one feature vector (d,)."""
@@ -54,6 +54,7 @@ class EventHead:
 
 
 def sha256(path: pathlib.Path) -> str:
+    """The SHA-256 digest of a file, as hex."""
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 

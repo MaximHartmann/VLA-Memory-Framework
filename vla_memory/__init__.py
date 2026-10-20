@@ -25,7 +25,8 @@ Two layers, chosen with --writer NAME and --method NAME (docs/writers/<name>/REA
                              other memories plug in as extensions (--with NAME)
   proxy                      the relay between the environment and the policy server that runs a writer and a method:
                              python -m vla_memory.proxy
-  (RECAP-lite, the parametric method, is a training recipe: docs/methods/recap/README.md)
+  (RECAP-lite, the parametric method, is a training recipe: docs/methods/recap/README.md; the built-in memory lives in the
+  policy, a reference implementation for pi0.5 on openpi in integrations/openpi: docs/methods/builtin_memory/README.md)
 """
 from .task import TaskSpec
 from .vlm import VLMBackend, OpenAICompatibleVLM, encode_png, make_vlm, register_vlm_backend

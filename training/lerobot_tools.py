@@ -9,6 +9,8 @@
     write_manifest                 a per-frame CSV next to a written dataset
     output_dataset                 the repo id and the folder of a split's output dataset
     states_match                   whether an episode's parquet state column equals the backing recording
+    episode_plan, episode_positions   a recorded episode's skills in order, and the position in them of the skill of every frame
+    RelabelError                   a dataset the relabelling scripts cannot relabel (message printed, exit code 3)
     task_index_column, task_index_stats, update_task_meta
                                    a relabelled task_index column, its statistics, and the meta/ files that describe it
 
@@ -26,6 +28,10 @@ import shutil
 import numpy as np
 import pyarrow as pa
 from PIL import Image
+
+
+class RelabelError(Exception):
+    """A dataset that cannot be relabelled; its message is printed and the script exits with code 3."""
 
 
 def read_jsonl(path) -> list[dict]:
@@ -94,6 +100,39 @@ def states_match(table, archive) -> bool:
     """Whether a parquet table's state column equals the backing recording's state array (shape and values)."""
     state = np.asarray(table.column("state").to_pylist(), dtype=np.float32)
     return state.shape == archive["state"].shape and bool(np.allclose(state, archive["state"], atol=1e-6))
+
+
+def episode_plan(archive, task_skills, name: str) -> list[str]:
+    """The skills of a recorded episode in order: its own `plan` (skill strings, all of them skills of the task) when the
+    recording has one, as an episode of a task whose plan varies does, else the task's skills in their order."""
+    if "plan" not in archive.files:
+        return list(task_skills)
+    plan = [str(skill) for skill in archive["plan"]]
+    unknown = [skill for skill in plan if skill not in task_skills]
+    if unknown:
+        raise RelabelError(f"{name}: plan skills {unknown} are not skills of the task")
+    return plan
+
+
+def episode_positions(archive, phase_to_skill: dict, name: str, rows: int) -> np.ndarray:
+    """The position in the episode's plan of the skill active at every frame (int64, `rows` frames), as the recording gives
+    it: `skill_index` for a task whose plan varies, else the waypoint `phase` of each frame mapped by phase_to_skill
+    ({phase: position}, the task file's demo_phases.phase_to_skill)."""
+    if "skill_index" in archive.files:
+        positions = np.asarray(archive["skill_index"]).astype(np.int64)
+        if len(positions) != rows:
+            raise RelabelError(f"{name}: {rows} rows but {len(positions)} plan positions")
+        return positions
+    if "phase" not in archive.files or not phase_to_skill:
+        raise RelabelError(f"{name}: the recording has no `skill_index`, and either it has no `phase` or the task file has no "
+                           f"demo_phases.phase_to_skill")
+    phase = archive["phase"].astype(int)
+    if len(phase) != rows:
+        raise RelabelError(f"{name}: {rows} rows but {len(phase)} phase labels")
+    unknown = set(np.unique(phase).tolist()) - set(phase_to_skill)
+    if unknown:
+        raise RelabelError(f"{name}: phases {sorted(unknown)} have no subgoal")
+    return np.array([phase_to_skill[value] for value in phase], dtype=np.int64)
 
 
 def task_index_column(table, task_indices: np.ndarray):

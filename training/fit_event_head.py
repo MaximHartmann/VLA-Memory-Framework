@@ -11,6 +11,8 @@ Input: one .npz file per recorded episode of the history policy (the policy's ow
     rows         (T, 5) float         finger width, squeeze, fingertip x, y, z at every step (memory/proprio_steps), which
                                       the task's rules writer labels: reference[t] = the lines it wrote after steps 0..t-1
     state        (T, D) float         optional: the policy's state input (default zeros of --state-dim)
+    plan, objects  (n,) str           optional, for a task whose plan varies: the skills of the episode in order, or the names
+                                      of its objects (the plan is then the task order of those objects)
 
 The steps:
 1. rows: the training rows of every episode (vla_memory.writers.head.rows), every 4th frame;
@@ -56,13 +58,28 @@ def episode_files(patterns) -> list[pathlib.Path]:
     return files
 
 
+def episode_objects(episode) -> list[str] | None:
+    """The names of the objects the episode file declares (`objects`), or None: all of the task's."""
+    if "objects" in episode.files:
+        return [str(name) for name in episode["objects"]]
+    return None
+
+
+def plan_of(episode, task: TaskSpec) -> list[str]:
+    """The skills of the episode in order: its `plan`, else the task order of its objects."""
+    if "plan" in episode.files:
+        return [str(skill) for skill in episode["plan"]]
+    return task.default_plan(episode_objects(episode))
+
+
 def reference_of(episode, task: TaskSpec) -> np.ndarray:
     """The episode's reference count, given or labelled from its signal rows by the task's rules writer."""
     if "reference" in episode.files:
         return np.asarray(episode["reference"], int)
     if "rows" not in episode.files:
         raise SystemExit("an episode file needs `reference` or `rows`")
-    lines = RuleMonitor(task).label_rows(episode["rows"], signals=episode_signals(episode) or None)
+    monitor = RuleMonitor(task, plan=plan_of(episode, task))
+    lines = monitor.label_rows(episode["rows"], signals=episode_signals(episode) or None)
     return head_rows.reference_from_lines(lines)
 
 
@@ -88,13 +105,14 @@ def row_observations(episode, rows: list, prompts: HistoryPrompt, task: TaskSpec
     exterior = episode["exterior"]              # an .npz array is read from the file at every access: read it once
     wrist = episode["wrist"]
     states = episode["state"] if "state" in episode.files else None
+    plan = plan_of(episode, task)
     observations = []
     for frame, k, _ in rows:
         state = states[frame] if states is not None else np.zeros(args.state_dim, np.float32)
         observations.append({"observation/image": letterbox(exterior[frame], args.image_size),
                              "observation/wrist_image": letterbox(wrist[frame], args.image_size),
                              "observation/state": np.asarray(state, np.float32),
-                             "prompt": prompts.render(instruction, task.skills[:k])})
+                             "prompt": prompts.render(instruction, plan[:k])})
     return observations
 
 

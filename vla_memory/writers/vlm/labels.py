@@ -1,9 +1,11 @@
 """Labelling recorded demonstrations for the exemplar store.
 
 The reference demos store a waypoint `phase` per frame (the scripted demo generator's segment index). From the
-phase and the position within the phase run, PhaseLabeller derives per frame: the state of every object (on the
-table, held at the table, held lifted), the gripper state (from the recorded closedness), whether the hand is high
-above the table, and the skill index that was active. The phase table comes from the task file (`demo_phases`).
+phase and the position within the phase run, PhaseLabeller derives per frame: the state of every object (resting, held at
+its resting height, held lifted: the task's state_roles, in the reference task on_table, held_at_table and held_lifted),
+the gripper state (from the recorded closedness), whether the hand is high above the table, and the skill index that was
+active. The phase table and the shares of a phase run at which an object changes state come from the task file
+(`demo_phases`).
 
 Any other source of labels works too: a labeller is just a function (episode_dict, frame_index) -> label dict with
 the task's object fields, 'gripper', 'gripper_high_above_table' and 'subgoal'.
@@ -13,6 +15,9 @@ from __future__ import annotations
 import pathlib
 
 import numpy as np
+
+
+STATE_SHARES = {"close": 0.66, "lift": 0.15, "lower": 0.6, "open": 0.33}   # as measured on the reference demonstrations
 
 
 def parse_ranges(spec: dict) -> dict:
@@ -36,26 +41,28 @@ def parse_episode_ids(text: str) -> list[int]:
     return ids
 
 
-def _object_state(phase: int, fraction: float, object_phases: dict) -> str:
+def _object_state(phase: int, fraction: float, object_phases: dict, states: tuple, shares: dict) -> str:
     """The state of one object in `phase`, `fraction` of the way through the phase run, from the object's own close, lift,
-    lower and open phases; on the table in every other phase."""
+    lower and open phases: resting, held at its resting height, or held lifted (`states`: the task's names of the three);
+    resting in every other phase. `shares`: the share of the phase run at which the state changes."""
+    rest, held_low, held_high = states
     if phase == object_phases["close"]:
-        if fraction > 0.66:
-            return "held_at_table"
-        return "on_table"
+        if fraction > shares["close"]:
+            return held_low
+        return rest
     if phase == object_phases["lift"]:
-        if fraction > 0.15:
-            return "held_lifted"
-        return "held_at_table"
+        if fraction > shares["lift"]:
+            return held_high
+        return held_low
     if phase == object_phases["lower"]:
-        if fraction < 0.6:
-            return "held_lifted"
-        return "held_at_table"
+        if fraction < shares["lower"]:
+            return held_high
+        return held_low
     if phase == object_phases["open"]:
-        if fraction < 0.33:
-            return "held_at_table"
-        return "on_table"
-    return "on_table"
+        if fraction < shares["open"]:
+            return held_low
+        return rest
+    return rest
 
 
 class PhaseLabeller:
@@ -73,6 +80,8 @@ class PhaseLabeller:
         if closed_threshold is None:
             closed_threshold = task.proprio.get("closed_threshold", 0.3)
         self.closed_threshold = closed_threshold
+        self.states = tuple(task.state_role(role) for role in ("rest", "held_low", "held_high"))   # the task's names of the object states
+        self.shares = {**STATE_SHARES, **phases.get("state_shares", {})}
         self.gripper_column = state_gripper_index   # column of the recorded state vector holding the gripper closedness
 
     def __call__(self, episode: dict, frame: int) -> dict:
@@ -82,7 +91,7 @@ class PhaseLabeller:
         run = np.flatnonzero(phases == phase)
         fraction = (frame - run[0]) / max(len(run) - 1, 1)
         closedness = float(np.asarray(episode["state"])[frame, self.gripper_column])
-        labels = {self.task.field(object_name): _object_state(phase, fraction, object_phases)
+        labels = {self.task.field(object_name): _object_state(phase, fraction, object_phases, self.states, self.shares)
                   for object_name, object_phases in self.per_object.items()}
         if closedness > self.closed_threshold:
             gripper = "closed"

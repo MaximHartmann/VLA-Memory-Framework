@@ -1,13 +1,23 @@
 # Reference task of the framework: a Franka arm, a red and a blue 4 cm cube on a table; pick up and put back the red
 # cube, then the blue one. The VLA policy was trained on the four skill strings below (one per frame of the demos).
 name: red_blue_blocks
-objects: [red, blue]
+objects: [red, blue]       # an episode may hold only some of them: the environment names them (memory/objects) and the plan follows
 verbs: ["pick up", "place"]
 skill_template: "{verb} the {object} block"
+# A verb whose skills do not read like the template has its own, skill_templates: {"put in box": "put the {object} cube into
+# the box"}. The task order, which is also the default plan, is object by object here: the skills of the red block, then of the
+# blue one. plan_stages: [[verb, ...], ...] makes it stage by stage instead, every stage over all objects in turn.
 object_field: "{object}_cube"
 object_noun: cube
 object_states: [on_table, held_lifted, held_at_table, unsure]
 max_plan_len: 8            # most skills in one plan (the plan schema's maxItems)
+
+# The object states the code gives a role: rest (an object nobody touches), held_low (held at the height it rests at) and
+# held_high (held lifted). The labellers of demonstrations and of live episodes write them, and the recovery step reads them.
+state_roles: {rest: on_table, held_low: held_at_table, held_high: held_lifted}
+# --recovery of the VLM writer: before the skill of the verb on the left, another object that is still held is put down with
+# the verb on the right.
+recovery: {"pick up": place}
 
 # Completion rule per verb, inserted verbatim into every monitor query. The numbers are the
 # ones measured on this robot: the hand is 11-13 cm above the table when it grasps or releases a cube, the demos'
@@ -94,6 +104,7 @@ demo_phases:
   per_object:
     red:  {close: 2, lift: 3, lower: 4, open: 5}
     blue: {close: 10, lift: 11, lower: 12, open: 13}
+  state_shares: {close: 0.66, lift: 0.15, lower: 0.6, open: 0.33}   # how far through its phase run an object changes state
   high_phases: [0, 7, 8]          # hand high above the table for the whole phase
   low_phases: [2, 5, 10, 13]      # hand down at the table
   rising_phases: [3, 6, 11, 14]   # hand high in the second half of the phase; other phases: high in the first half
@@ -122,6 +133,12 @@ history:
   object_from: colour
   held_region: [0.30, 0.60, 0.33, 0.67]
   held_min_share: 0.12
+
+# The keyframe method's later placing keyframe (--keyframe-placed-later): the events of the verbs with a set_down rule (here
+# "place"; keyframe.placed_verbs names others) wait until the hand has risen above an object resting on the table, whose
+# centre is at rest_z (m: a 4 cm cube on the table top at 0.74 m).
+keyframe:
+  rest_z: 0.76
 
 instruction_examples:
   - "Pick up the red block with your arm, place it back, and then grasp the blue block."

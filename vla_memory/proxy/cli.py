@@ -14,9 +14,13 @@ Methods (--method):
     keyframe   the instruction, and the wrist picture of the last key moment as a third picture
 
 Option groups: the connection (--listen-port, --upstream-port, --upstream-host, --transport, --transport-arg, --log), the
-task and the choices (--task, --writer, --method, --image-keys), and the extensions (--with NAME, repeatable). The chosen
-writer, method and extensions add their own options; --help with the choices lists them. The defaults are --writer vlm
---method subgoal: the planner loop.
+task and the choices (--task, --writer, --method, --image-keys), the policy's own memory (--memory-reset) and the extensions
+(--with NAME, repeatable). The chosen writer, method and extensions add their own options; --help with the choices lists
+them. The defaults are --writer vlm --method subgoal: the planner loop.
+
+The episode markers memory/new_episode and memory/episode always reach the policy as the environment sent them, so that a
+policy that keeps its own memory resets it when an episode starts. --memory-reset every-call marks every call as a new
+episode instead: the policy clears its memory before every call, the test of whether it uses its memory at all.
 
 --writer, --method and --with take a registered name (writers/base.py WRITERS, methods/base.py METHODS, extensions.py
 EXTENSIONS), an entry point of vla_memory.writers / vla_memory.methods / vla_memory.extensions, or module:Class.
@@ -33,7 +37,7 @@ import signal
 from typing import Sequence
 
 from .extensions import Extension, build_extensions, resolve_extension
-from .relay import Relay
+from .relay import MEMORY_RESETS, Relay
 from .server import ProxyServer
 from ..methods.base import resolve_method
 from ..plugins import construct, key_value
@@ -83,11 +87,20 @@ def add_task_options(parser: argparse.ArgumentParser):
                         help="observation keys of the camera images used when memory/*_raw frames are not sent")
 
 
+def add_policy_memory_options(parser: argparse.ArgumentParser):
+    """When a policy that keeps its own memory is told that an episode starts."""
+    parser.add_argument("--memory-reset", choices=MEMORY_RESETS, default="episode",
+                        help="episode: forward the environment's episode markers (default); every-call: mark every call as "
+                             "a new episode, so that a policy with its own memory clears it before every call (the reset "
+                             "test)")
+
+
 def build_parser(writer_class, method_class, extension_classes: Sequence[type] = ()) -> argparse.ArgumentParser:
     """The command line with the options of the chosen writer, method and extensions."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_connection_options(parser)
     add_task_options(parser)
+    add_policy_memory_options(parser)
     add_choice_options(parser)
     writer_class.add_arguments(parser)
     method_class.add_arguments(parser)
@@ -163,6 +176,8 @@ def component_metadata(args) -> dict:
         metadata["vlm_backend"] = args.vlm_backend
     if (args.transport or "openpi") != "openpi":
         metadata["transport"] = args.transport
+    if getattr(args, "memory_reset", "episode") != "episode":
+        metadata["memory_reset"] = args.memory_reset
     return metadata
 
 
@@ -190,7 +205,7 @@ def main(argv=None):
     except ValueError as error:
         parser.error(str(error))
     relay = Relay(build_transport(args), writer, method, args.log, image_keys=args.image_keys, task=task,
-                  extensions=extensions)
+                  extensions=extensions, memory_reset=args.memory_reset)
     serve(relay, args.listen_host, args.listen_port, proxy_metadata(args, task, writer, method, extensions))
 
 

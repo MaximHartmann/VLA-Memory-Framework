@@ -5,13 +5,17 @@
                             |  a method turns that into what the policy receives (methods/)
 
 The environment sends its ordinary observation with the FULL instruction as `prompt`, plus control keys under the
-`memory/` prefix (vla_memory/env_keys.py). The relay strips them and, at every call, in this order:
+`memory/` prefix (vla_memory/env_keys.py). The relay strips them (only the episode markers also reach the policy, step
+4) and, at every call, in this order:
 
     1. a new episode: the extensions, the method and the writer (its plan) start it
     2. writer.before_call      a writer that decides from this call's inputs
     3. method.prompt           the prompt of this call shows that decision (with the writer "off": the instruction)
     4. method.before_policy    keys added to the observation (a picture)
        extensions' before_policy   keys added by the extensions (a retrieved memory)
+       the episode markers     memory/new_episode and memory/episode go to the policy as the environment sent them, so that
+                               a policy that keeps its own memory resets it when an episode starts; with --memory-reset
+                               every-call every call is marked as a new episode (the reset test)
     5. the policy's call
     6. the extensions' on_reply, then writer.after_call: a writer that decides from the policy's reply; its decision shows
        from the next call on
@@ -34,6 +38,8 @@ from ..transport import PolicyTransport, text_of
 from ..writers.base import Call
 
 log = logging.getLogger("vla_memory.proxy")
+EPISODE_MARKERS = ("new_episode", "episode")    # the control keys that also go to the policy, unchanged
+MEMORY_RESETS = ("episode", "every-call")       # when a policy that keeps its own memory is told to reset it
 
 
 def split_control_keys(observation: dict) -> tuple[dict, dict]:
@@ -50,17 +56,21 @@ def split_control_keys(observation: dict) -> tuple[dict, dict]:
 
 class Relay:
     """One writer, one method and the extensions around a policy transport; infer() relays one policy call (module
-    docstring). log_path: the proxy's log, one JSON record per call, appended."""
+    docstring). log_path: the proxy's log, one JSON record per call, appended. memory_reset: "episode" forwards the
+    environment's episode markers, "every-call" marks every call as a new episode."""
 
     def __init__(self, transport: PolicyTransport, writer, method, log_path=None,
                  image_keys=("observation/image", "observation/wrist_image"), task: TaskSpec | None = None,
-                 extensions: Sequence[Extension] = ()):
+                 extensions: Sequence[Extension] = (), memory_reset: str = "episode"):
+        if memory_reset not in MEMORY_RESETS:
+            raise ValueError(f"memory_reset {memory_reset!r}: one of {MEMORY_RESETS}")
         self.transport = transport
         self.writer = writer               # keeps the plan and its pointer
         self.method = method               # turns them into what the policy receives
         self.image_keys = tuple(image_keys)
         self.task = task if task is not None else getattr(writer, "task", None)
         self.extensions = list(extensions)
+        self.memory_reset = memory_reset
         self.episode = None
         self.episode_count = 0
         self._log_file = open(log_path, "a") if log_path else None
@@ -83,6 +93,7 @@ class Relay:
         call = Call(instruction, control_keys, observation, self.image_keys)
         info.update(self.writer.before_call(call, self.extensions))
         prompt = self._decide_prompt(instruction, observation, control_keys, info)
+        observation.update(self.episode_markers(control_keys))
         reply = self._forward(observation, info)
         self._reply_hooks(observation, control_keys, reply, prompt, info)
         info.update(self.writer.after_call(reply))
@@ -105,6 +116,15 @@ class Relay:
         return prompt
 
     # ------------------------------------------------------------------ episodes
+    def episode_markers(self, control_keys: dict) -> dict:
+        """The episode markers the policy receives with the observation: memory/new_episode and memory/episode as the
+        environment sent them. With memory_reset "every-call" every call is marked as a new episode, so that a policy that
+        keeps its own memory clears it before every call; the proxy's own episodes stay the environment's."""
+        markers = {CONTROL_PREFIX + key: control_keys[key] for key in EPISODE_MARKERS if key in control_keys}
+        if self.memory_reset == "every-call":
+            markers[CONTROL_PREFIX + "new_episode"] = True
+        return markers
+
     def _is_new_episode(self, control_keys: dict) -> bool:
         """Whether this call starts an episode: the first call, memory/new_episode, or a changed episode id."""
         episode_id = text_of(control_keys.get("episode"))

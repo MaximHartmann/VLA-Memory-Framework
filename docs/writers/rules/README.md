@@ -2,12 +2,25 @@
 
 ## The idea
 
-A skill of a pick-and-place task ends with a movement every robot can measure on itself: the block is lifted, or it is set
-down and the hand moves away. The rules writer follows one grasp cycle at every control step, from the finger width, the
-squeeze force and the fingertip position: *holding* (the fingers stopped between two widths and squeeze), *lift* (the
-fingertips rose a set height above the grasp point), *set-down* (the fingers opened less than a set height above the grasp
-point; higher up is a drop), *retreat* (the fingertips moved a set distance up or away from the release point). The task
-file maps each verb to the trigger that completes it and gives the thresholds:
+A pick-and-place skill ends with a movement the robot can measure on itself. "Pick up" is done when the fingers hold the
+block and the hand has lifted it. "Place" is done when the hand has set the block down, opened, and moved away from it. The
+rules writer watches for exactly these two moments. It needs no model and no tracker, only three readings every robot arm
+has at every control step:
+
+- the **finger width**: how far apart the two fingers are;
+- the **squeeze**: how hard the fingers press on something (the finger force; a gripper that only reports "holding" or "not
+  holding" works too);
+- the **fingertip position**: where the fingertips are, computed from the measured joint angles.
+
+From these readings the writer follows one grasp cycle at a time: *free*, *holding*, *lifted*, *released*, and back to
+*free* ([the picture](detailed/README.md#4-the-grasp-cycle)). Two moments of the cycle fire a trigger:
+
+- **lift**: the fingers hold something and have risen a set height (9 cm in the reference task) above the point where they
+  closed;
+- **set down**: the fingers opened low down, close to where they grasped (opening higher up counts as a drop), and then
+  moved a set distance up (6 cm) or away (8 cm).
+
+The task file says which trigger completes which verb, and gives the thresholds. The reference task's:
 
 ```yaml
 history:
@@ -22,44 +35,77 @@ proprio:
   squeeze_force: 8.0
 ```
 
-A trigger completes the current skill only if its verb matches, and the pointer only moves forward, so a block that slipped
-out and is grasped again does not complete a skill twice. Verbs that share a trigger may carry thresholds of their own, which
-the grasp cycle takes from the current skill's verb: a cube put into a container is let go just above where it was
-grasped, a cube stacked on a tall stack several centimetres higher. Skills without a grasp (open a drawer, press a button) use
-`trigger: signals`: ordered phases of thresholds on signals the task declares. A colour identifier on the wrist image names
-the object held at each pick, so a robot that takes the blue block first completes the right skill and the plan is
-reordered (the pending skills of that object in the current stage of the task's `plan_stages`; one stage covers every verb).
-The plan is the task order; for an episode whose objects the environment names (`memory/objects`) it covers those objects
-only. The writer decides before the policy call, from the control steps since the last call, so the prompt of the same
-call shows the decision; it needs no model and takes 0.16 ms per call. The same rules label recorded episodes
-(`RuleMonitor.label_rows`), so training labels and run-time decisions come from one definition.
+When a trigger fires and fits the verb of the current skill, the writer marks the skill as complete and moves on to the next
+skill of the plan. It never moves back, so a block that slips out and is grasped again is not "picked up" twice. The plan is
+the task file's order of the skills; when the environment names the episode's objects (`memory/objects`), the plan covers
+only those.
+
+**Which object?** The grasp cycle tells *when* something was picked up, not *what*. With `object_from: colour` the writer
+looks at the wrist image at every pick and names the held object by its colour. If the robot picks up the blue block while
+the plan expects the red one, the writer moves blue's skills to the front of the plan, so the right skill is completed.
+
+**Why these thresholds.** The policy was trained on demonstrations whose labels switch at fixed moments: "pick up" ends when
+the block is 9 cm up, "place" ends after the hand has retreated from the set-down block. The writer must switch at the same
+moments; one that switches earlier than the labels makes the policy grasp the same block again. The same rules can label
+recorded episodes (`RuleMonitor.label_rows`), so the training labels and the decisions at run time come from one definition.
+
+**Other cases.** Verbs that share a trigger may have thresholds of their own, and the writer uses those of the current skill:
+a cube put into a box is let go just above where it was grasped, a cube put on a tall stack much higher. Skills without a
+grasp (open a drawer, press a button) use `trigger: signals`: an ordered list of conditions on the robot's signals.
+
+**Timing.** The writer decides before the policy call, from the readings of every control step since the previous call, so
+the policy sees the next skill in the same call. On our server it takes about 0.03 ms per call, plus about 0.08 ms for the
+colour check at a pick.
+
+**What it cannot do.**
+
+- It only knows what the gripper feels. A block that was set down but fell over, or landed in the wrong place, still counts
+  as placed.
+- Without the colour check it cannot tell which object was picked and assumes the plan's. The colour check needs objects of
+  clearly different colours.
+- It follows the task file's order (apart from picks that the colour check moves forward). It cannot turn a new instruction
+  into a plan; the VLM writer can.
+- It never takes a skill back. If a person puts a placed block back where it was, the writer still counts it as placed.
+- Its thresholds must be measured from the policy's training demonstrations; thresholds that do not match make the policy
+  fail even when the writer is right about the event.
+- It needs the readings of every control step, not only those at the policy calls; a short event between calls is missed
+  otherwise.
+
+A walkthrough of the code, from the command line to the last policy call: [detailed/README.md](detailed/README.md).
 
 ## Prerequisites
 
 - A task file with a `history` section (`rules`, `object_from`, `max_lines`) and the gripper thresholds under `proprio`,
-  taken from the moments at which the policy's training labels change.
-- An environment that sends `memory/proprio_steps` (finger width, squeeze, fingertip x, y, z of every control step since
-  the last call), the wrist image (`memory/wrist_raw`) for the colour identifier, and `memory/signal_steps` for
-  `trigger: signals` rules, and `memory/objects` for a task whose episodes hold only some of its objects;
-  `vla_memory.env_keys.ControlKeys` builds these keys.
-- Recorded episodes with a reference (a ground-truth tracker, the training labels or a person's annotation), to check a rule
-  set before it drives a robot.
+  measured at the moments at which the policy's training labels change.
+- An environment that sends, with every policy call:
+  - `memory/proprio_steps`: the finger width, the squeeze and the fingertip position x, y, z of every control step since the
+    previous call;
+  - the wrist image (`memory/wrist_raw`) for the colour check;
+  - `memory/signal_steps` for `trigger: signals` rules;
+  - `memory/objects` for a task whose episodes hold only some of its objects.
+
+  `vla_memory.env_keys.ControlKeys` builds these entries.
+- Recorded episodes with a reference (a ground-truth tracker, the training labels or a person's annotation), to check a set
+  of rules before it drives a robot.
 
 ## How to use it in the framework
 
 ```
-python -m vla_memory.proxy --writer rules --method subgoal --listen-port <port> --upstream-port <policy port> [--task task.yaml]
-python -m vla_memory.writers.rules.validate --episodes 'recorded/*.npz' [--task task.yaml] [--call-every 8]
-python -m vla_memory.writers.rules.author --variant easy --out authored.yaml [--task task.yaml]
+python -m vla_memory.proxy --writer rules --method subgoal --task task.yaml --listen-port <port> --upstream-port <policy port>
+python -m vla_memory.writers.rules.validate --episodes 'recorded/*.npz' --task task.yaml [--call-every 8]
+python -m vla_memory.writers.rules.author --variant easy --out authored.yaml --task task.yaml
 ```
 
-`--method history` or another method instead of `subgoal`. The proxy's log record of a call holds `advanced`,
-`skill_index`, `completed` (the skills completed at this call), `writer_state` and `identified` (the colour identifier's
-answer at a pick). Before a rule set drives a robot, the validator replays recorded episodes (`rows`: the signals per step,
-`reference`: the completed skills per step) and reports, per skill, how often the writer switches in the same policy call
-as the reference, earlier, later, missed or false. The rules author lets the planning model write `history.rules` from the
-task's completion criteria (`--variant easy`) or from signal statistics of labelled demonstrations (`--variant hard`); its
-rules are used only after the validator has checked them.
+`--task` can be left out for the reference task, and `--method history` or another method can replace `subgoal`.
+
+- **The proxy's log** holds, for every call: `advanced` (a skill was completed), `skill_index`, `completed` (the skills
+  completed at this call), `writer_state` (the grasp cycle's state) and `identified` (the colour check's answer at a pick).
+- **The validator** replays recorded episodes (`rows`: the readings per step; `reference`: the number of completed skills per
+  step) and reports, for every skill, how often the writer switches in the same policy call as the reference, earlier,
+  later, not at all, or without a reason. Run it before a set of rules drives a robot.
+- **The author** lets the planning model write `history.rules`: from the task's completion criteria (`--variant easy`) or
+  from statistics of the signals in labelled demonstrations (`--variant hard`). Its rules are used only after the validator
+  has checked them.
 
 ## Our findings
 
@@ -72,10 +118,10 @@ seeds of 500 control steps, a policy call every 8 steps:
 | history | 79 | the history equal to the ground truth's in 6297 of 6300 policy calls |
 | keyframe | 75 | |
 
-- With each method the rules writer is within noise of the simulator's ground truth and, where both ran, of the VLM
-  planner. For a task whose skill order is known it replaces both, in real time and without a model; the planner is needed
-  to turn a new instruction into a plan.
-- The colour identifier named every one of 957 recorded picks correctly, including the 31 in which the robot took the blue
-  block first.
-- Limits: the validator checks when the skills switch, not which object they name; the identifier is checked separately on
-  recorded picks. One task has run live.
+- With every method the rules writer is within noise of the simulator's ground truth and, where both ran, of the VLM
+  planner. For a task whose skill order is known it can replace both, in real time and without a model; the VLM planner is
+  needed to turn a new instruction into a plan.
+- The colour check named the held block correctly in all 957 recorded picks, including the 31 in which the robot took the
+  blue block first.
+- Limits of these measurements: the validator checks when the skills switch, not which object they name; the colour check
+  was measured separately, on recorded picks. Only the reference task has run live.

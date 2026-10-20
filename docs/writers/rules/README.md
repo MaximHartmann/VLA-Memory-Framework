@@ -54,8 +54,8 @@ a cube put into a box is let go just above where it was grasped, a cube put on a
 grasp (open a drawer, press a button) use `trigger: signals`: an ordered list of conditions on the robot's signals.
 
 **Timing.** The writer decides before the policy call, from the readings of every control step since the previous call, so
-the policy sees the next skill in the same call. On our server it takes about 0.03 ms per call, plus about 0.08 ms for the
-colour check at a pick.
+the policy sees the next skill in the same call. It adds about 0.16 ms to a policy call in the proxy (median of a full
+evaluation run); the rules themselves take about 0.03 ms of that, the colour check at a pick about 0.08 ms.
 
 **What it cannot do.**
 

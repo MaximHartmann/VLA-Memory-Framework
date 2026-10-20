@@ -9,7 +9,7 @@ object_noun: cube
 object_states: [on_table, held_lifted, held_at_table, unsure]
 max_plan_len: 8            # most skills in one plan (the plan schema's maxItems)
 
-# Completion rule per verb, inserted verbatim into every monitor query (criteria v7, 2026-09-28). The numbers are the
+# Completion rule per verb, inserted verbatim into every monitor query. The numbers are the
 # ones measured on this robot: the hand is 11-13 cm above the table when it grasps or releases a cube, the demos'
 # lift ends 24-27 cm up; "pick up" is done at 22 cm (cube about 9 cm up), "place" only after the release AND the
 # retreat upwards, because that is where the demo labels switch to the next skill.

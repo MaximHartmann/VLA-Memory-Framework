@@ -23,10 +23,14 @@ proprio:
 ```
 
 A trigger completes the current skill only if its verb matches, and the pointer only moves forward, so a block that slipped
-out and is grasped again does not complete a skill twice. Skills without a grasp (open a drawer, press a button) use
+out and is grasped again does not complete a skill twice. Verbs that share a trigger may carry thresholds of their own, which
+the grasp cycle takes from the current skill's verb: a cube put into a container is let go just above where it was
+grasped, a cube stacked on a tall stack several centimetres higher. Skills without a grasp (open a drawer, press a button) use
 `trigger: signals`: ordered phases of thresholds on signals the task declares. A colour identifier on the wrist image names
 the object held at each pick, so a robot that takes the blue block first completes the right skill and the plan is
-reordered. The writer decides before the policy call, from the control steps since the last call, so the prompt of the same
+reordered (the pending skills of that object in the current stage of the task's `plan_stages`; one stage covers every verb).
+The plan is the task order; for an episode whose objects the environment names (`memory/objects`) it covers those objects
+only. The writer decides before the policy call, from the control steps since the last call, so the prompt of the same
 call shows the decision; it needs no model and takes 0.16 ms per call. The same rules label recorded episodes
 (`RuleMonitor.label_rows`), so training labels and run-time decisions come from one definition.
 
@@ -36,7 +40,8 @@ call shows the decision; it needs no model and takes 0.16 ms per call. The same 
   taken from the moments at which the policy's training labels change.
 - An environment that sends `memory/proprio_steps` (finger width, squeeze, fingertip x, y, z of every control step since
   the last call), the wrist image (`memory/wrist_raw`) for the colour identifier, and `memory/signal_steps` for
-  `trigger: signals` rules; `vla_memory.env_keys.ControlKeys` builds these keys.
+  `trigger: signals` rules, and `memory/objects` for a task whose episodes hold only some of its objects;
+  `vla_memory.env_keys.ControlKeys` builds these keys.
 - Recorded episodes with a reference (a ground-truth tracker, the training labels or a person's annotation), to check a rule
   set before it drives a robot.
 

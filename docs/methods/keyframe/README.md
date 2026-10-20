@@ -30,7 +30,8 @@ than the frame itself, since at run time the picture is taken at the call that s
 - At run time: an environment that sends the raw wrist frame (`memory/wrist_raw`) and what the writer reads
   (`memory/oracle_prompt` for the simulator's events, `memory/proprio_steps` for the rules writer), as
   `vla_memory.env_keys.ControlKeys` builds them. The later "placed" keyframe also needs the joint state in
-  `observation/state` (the 7 arm joints first); the forward kinematics of the reference Franka arm is built in.
+  `observation/state` (the 7 arm joints first); the forward kinematics of the reference Franka arm is built in, and the
+  centre height of a placed object resting on the table comes from the task file (`keyframe.rest_z`, 0.76 m for the 4 cm cube).
 
 ## How to use it in the framework
 
@@ -54,10 +55,11 @@ than the frame itself, since at run time the picture is taken at the call that s
    ```
 
    `--writer rules` instead of `oracle` for the rules writer. `--keyframe-mode off` takes the keyframes and never sends
-   them: the control. `--keyframe-placed-later` takes the
-   "placed" keyframe at the first call from its signal on at which the fingertips are at least 10 cm above the placed cube
-   (`--keyframe-placed-height`), at the latest at the third call after the signal (`--keyframe-placed-calls`). Every proxy
-   log record says which event the current keyframe belongs to, the step it was taken at and whether it was sent.
+   them: the control. `--keyframe-placed-later` takes the keyframe of a placing event ("placed red" in the reference task: a
+   skill whose verb the task file's rules complete with a set-down, or `keyframe.placed_verbs`) at the first call from its
+   signal on at which the fingertips are at least 10 cm above the placed cube (`--keyframe-placed-height`), at the latest at
+   the third call after the signal (`--keyframe-placed-calls`). Every proxy log record says which event the current keyframe
+   belongs to, the step it was taken at and whether it was sent.
 
 ## Our findings
 

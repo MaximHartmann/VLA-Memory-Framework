@@ -3,10 +3,11 @@
 ## The idea
 
 A vision-language model (VLM) acts as the planner. Once per episode it turns the user's instruction into an ordered list of
-the skills the policy was trained on, and at every policy call it judges from the camera images and the robot's
-proprioception whether the current skill is complete. When it says "done", its pointer moves to the next skill before the
-policy call, so the method shows the decision in the same call. With the sub-goal method, which hands the policy the
-current skill, this is the planner loop:
+the skills the policy was trained on (of the episode's objects only, when the environment names them as `memory/objects`: the
+plan request lists them and the answer schema admits only their skills), and at every policy call it judges from the camera
+images and the robot's proprioception whether the current skill is complete. When it says "done", its pointer moves to the
+next skill before the policy call, so the method shows the decision in the same call. With the sub-goal method, which hands
+the policy the current skill, this is the planner loop:
 
 ![The planner loop](planner_loop.png)
 
@@ -37,7 +38,8 @@ never moves back. The writer draws on SayCan (a language model plans over a fixe
 - Optional: an exemplar store built from recorded demonstrations (`scripts/build_exemplar_store.py`); no store is
   distributed with the repository.
 - An environment that sends the full instruction as `prompt` and the control keys under `memory/`: step, episode, the raw
-  camera frames, gripper closedness and hand height. `vla_memory.env_keys.ControlKeys` builds them.
+  camera frames, gripper closedness and hand height, and `memory/objects` for a task whose episodes hold only some of its
+  objects. `vla_memory.env_keys.ControlKeys` builds them.
 
 ## How to use it in the framework
 

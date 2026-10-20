@@ -15,6 +15,7 @@ call t + 1  the same skill, done again               ->  the writer completes it
 call t + 2  "... History: picked up the red block, placed the red block."
 ```
 
+The writer's plan is the task order (of the episode's objects, when the environment names them as `memory/objects`).
 The policy stays frozen and nothing outside it looks at the robot or the cameras. The head is fitted afterwards on the
 policy's own rollouts, labelled by another writer, here the rules writer. The idea follows the event head of UniMem
 (Osterberg et al., 2026, arXiv 2608.22869), here as a probe on a frozen policy instead of a head trained with it.

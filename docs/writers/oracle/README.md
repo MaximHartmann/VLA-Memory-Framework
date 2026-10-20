@@ -4,10 +4,12 @@
 
 In simulation the environment knows where every object is, so a tracker can tell when a skill is complete. The oracle writer
 takes its word. With every policy call the environment sends the skill its tracker considers current as
-`memory/oracle_prompt`, and before the call the writer sets its pointer to that skill's index in the task's skill order. The
-method of the run shows the pointer in the same call: the skill itself (sub-goal), the instruction with a line per earlier
-skill (history), or the picture taken when the pointer moved (keyframe). An oracle prompt that is not one of the task's
-skills is forwarded to the policy unchanged, and the pointer stays where it was.
+`memory/oracle_prompt`, and before the call the writer sets its pointer to that skill's index in the task's skill order. For
+an episode whose objects the environment names (`memory/objects`) the plan is the order in which the tracker reports the
+skills, so that the skills reported before the current one are the completed ones. The method of the run shows the pointer
+in the same call: the skill itself (sub-goal), the instruction with a line per earlier skill (history), or the picture taken
+when the pointer moved (keyframe). An oracle prompt that is not one of the task's skills is forwarded to the policy
+unchanged, and the pointer stays where it was.
 
 The oracle is the reference the other writers are measured against: as far as the tracker is right, it is never late, never
 early and never misses a skill. A real robot has no such tracker.

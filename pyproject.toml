@@ -12,6 +12,8 @@ dependencies = ["numpy>=1.24", "pillow>=9", "requests>=2.28", "pyyaml>=6"]
 
 [project.optional-dependencies]
 proxy = ["websockets>=12", "openpi-client"]   # openpi-client: pip install from the openpi repository (packages/openpi-client)
+session_store = ["lancedb>=0.26", "pyarrow>=16"]                # the session store's database (the colour key needs nothing more)
+session_store_encoders = ["torch>=2.0", "transformers>=4.40"]   # the session store's dinov2 and siglip keys
 
 [project.scripts]
 vla-memory-proxy = "vla_memory.proxy.cli:main"

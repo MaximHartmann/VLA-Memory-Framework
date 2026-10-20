@@ -7,6 +7,7 @@ on a writer's signal, base.METHODS their registry; one of them is chosen with --
 Other memories plug in with --with NAME (proxy/extensions.py):
     memory_policy                  a store of moments of recorded episodes, the nearest one handed to the policy
     notebook                       the preference notebook about the user, read by the VLM planner
+    session_store                  the VLM writer's long-term memory on a vector database: labelled moments of past episodes
 """
 from .base import METHODS, Method, register_method, resolve_method
 

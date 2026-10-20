@@ -44,6 +44,7 @@ from ..plugins import resolve
 EXTENSIONS: dict[str, Any] = {
     "memory_policy": "vla_memory.methods.memory_policy.extension:MemoryPolicyExtension",   # the retrieved moment
     "notebook": "vla_memory.methods.notebook.extension:NotebookExtension",                  # the preference notebook
+    "session_store": "vla_memory.methods.session_store.extension:SessionStoreExtension",    # the VLM writer's memory on a database
 }
 EXTENSION_ENTRY_POINTS = "vla_memory.extensions"
 

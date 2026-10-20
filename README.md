@@ -72,6 +72,7 @@ the script in `training/` that builds the matching training dataset, in LeRobot 
 | in the run | the policy must accept | training data |
 |---|---|---|
 | `--writer off` | the full instruction as the prompt (the memoryless policy) | `convert_to_lerobot.py` |
+| `--writer off` with a policy that keeps its own memory (the built-in memory) | the full instruction and the episode markers, which the proxy forwards unchanged: the policy keeps a state per episode and resets it at `memory/new_episode` (True at an episode's first call) or a new `memory/episode`; `--memory-reset every-call` marks every call as a new episode, so the state is cleared before every call (the reset test) | the demonstrations and intervention episodes with their feature caches, trained with the launcher in `integrations/openpi` |
 | `--method subgoal` | short skill prompts, one at a time ("pick up the red block") | `relabel_subgoals.py` |
 | `--method history` | the full instruction followed by " History: <completed skills>" ("... History: picked up the red block.") | `relabel_history.py` |
 | `--method keyframe` | the plain instruction and a third picture, `observation/memory_image`: the wrist picture of the last key moment, masked out until the first event | `relabel_keyframe.py` |
@@ -84,9 +85,10 @@ the script in `training/` that builds the matching training dataset, in LeRobot 
 The proxy reaches the policy through the openpi serving protocol: msgpack-encoded numpy arrays over a websocket, through the
 `openpi_client` library. It reads the server's metadata once and then sends one observation per policy call: the environment's
 own keys (the reference: `observation/image`, `observation/wrist_image`, `observation/state`) with the `prompt` the method
-decided and, for a third picture, `observation/memory_image`. It expects a dict with `actions` back. A server that speaks this
-protocol, such as openpi's `serve_policy.py`, needs nothing else; for another protocol, `--transport` names a class with an
-`infer(observation)` method that returns `{"actions": ...}` (`vla_memory/transport.py`).
+decided, the episode markers `memory/new_episode` and `memory/episode` as the environment sent them and, for a third picture,
+`observation/memory_image`. It expects a dict with `actions` back. A server that speaks this protocol, such as openpi's
+`serve_policy.py`, needs nothing else; for another protocol, `--transport` names a class with an `infer(observation)` method
+that returns `{"actions": ...}` (`vla_memory/transport.py`).
 
 ## Other methods
 
@@ -96,12 +98,14 @@ protocol, such as openpi's `serve_policy.py`, needs nothing else; for another pr
 | Memory policy | long-term memory read by the policy: the stored moment of recorded episodes most similar to the current one (its wrist picture and the next movement as a sentence) in the policy's input at every call; the policy reads it, but it does not improve it (98 of 100 with memory, 96 without) | `--with memory_policy` | [docs/methods/memory_policy](docs/methods/memory_policy/README.md) |
 | Preference notebook | long-term memory of the user: short rules with a scope (the plan, a skill's completion rule, the planner's strictness), written from the user's words and after failures, read by the VLM writer's planner before every episode; "only the red block today" gave the red-only plan in 20 of 20 episodes (0 of 20 without), a correction raised the success from 12 to 19 of 20 | `--with notebook`, with `--writer vlm` | [docs/methods/notebook](docs/methods/notebook/README.md) |
 | Session store | long-term memory of the VLM writer on an embedded vector database (LanceDB): labelled moments of past episodes, retrieved by a choice of keys, with payload filters, provenance and a size cap, growing from the robot's own episodes; the colour key finds the right skill more often than DINOv2 and SigLIP (recall@1 0.47 against 0.19 with the camera moved 5 cm), and a cap of 1,000 moments costs no task success (91 of 100 with use-and-recency eviction, 91 without a cap) | `--with session_store`, with `--writer vlm` | [docs/methods/session_store](docs/methods/session_store/README.md) |
+| Built-in memory | working memory inside the network: a recurrent state over the policy's own layer-12 features, kept per episode by the policy server and read by the action expert; learned only from intervention data: 65 of 100 (the memoryless policy 11), 0 with the state cleared before every call | a policy server with its own state behind `--writer off`; the proxy forwards the episode markers, `--memory-reset every-call` runs the reset test; pi0.5 on openpi in `integrations/openpi` | [docs/methods/builtin_memory](docs/methods/builtin_memory/README.md) |
+| Learning from interventions | parametric memory of the robot's own mistakes: its runs with a scripted expert taking over on memory errors, trained into a policy with the built-in memory; a second round recorded with the memory policy driving gave 65 of 100 against 51 for the same training on the first round's data (p = 0.029) | a data recipe for the built-in memory's training | [docs/methods/learning_from_interventions](docs/methods/learning_from_interventions/README.md) |
 
 ## Tried and not adopted
 
 | idea | result | page |
 |---|---|---|
-| Frame window: the last 8-16 policy calls as compressed frame summaries, pooled into the action expert's conditioning | 6-12 of 100 in two versions (the recurrent memory on the same data: 34-39); the information was in the window, selected in the second version, and not used by the controller | [docs/methods/frame_window](docs/methods/frame_window/README.md) |
+| Frame window: the last 8-16 policy calls as compressed frame summaries, pooled into the action expert's conditioning | 6-12 of 100 in two versions (the [built-in memory](docs/methods/builtin_memory/README.md) on the same data: 34-39); the information was in the window, selected in the second version, and not used by the controller | [docs/methods/frame_window](docs/methods/frame_window/README.md) |
 
 Each further writer or method gets its own page under `docs/writers/` or `docs/methods/` and a row in these tables; an idea
 that was evaluated and did not work gets a page and a row here.

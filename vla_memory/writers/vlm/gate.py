@@ -4,7 +4,9 @@ asking the model.
 Each retrieved moment votes "done" when its stored skill is later in the task's skill order than the current skill, the
 same rule that labels the examples shown to the model. A full vote with fewer than `gate_min_done` "done" votes settles
 the call as "not done"; any "done" vote asks the model. The last skill of the plan, and the task's last skill, are always
-asked: no stored moment is labelled later than the task's last skill, so its vote is never "done".
+asked: no stored moment is labelled later than the task's last skill, so its vote is never "done". A task whose
+plan order varies from episode to episode has no order of skills across objects: the vote is right between the skills of
+one object and between plan stages, and arbitrary between two objects of one stage (--no-gate asks at every call).
 """
 from __future__ import annotations
 

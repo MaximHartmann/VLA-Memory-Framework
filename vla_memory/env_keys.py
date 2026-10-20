@@ -2,7 +2,7 @@
 signals, so that a new environment does not rebuild the per-step buffers by hand.
 
     keys = ControlKeys(task)                    # one per environment lane; the task names its extra signals (task.signals)
-    keys.start_episode("seed7")                 # the next call carries memory/new_episode
+    keys.start_episode("seed7")                 # the next call carries memory/new_episode (objects=[...]: see below)
     for step in range(max_steps):
         keys.record(finger_width=width, finger_effort=effort, tip_xyz=tip,      # EVERY control step: what the robot
                     signals={"contact_force": force})                           # measures now, before the step's action
@@ -15,6 +15,9 @@ record() buffers one row per control step. call() returns the keys of the policy
 observation() is the policy's own keys, the FULL instruction as `prompt`, and call():
     new_episode, episode, step     True at the first call after start_episode() (and at the very first call), the episode id
                                    (sent if given), the step
+    objects                        the names of this episode's objects, when start_episode() was given them (list of str, sent at
+                                   every call of the episode): for a task whose episodes hold only some of the task's objects,
+                                   so that the writers plan for these (writers/base.py start_episode)
     oracle_prompt, exterior_raw, wrist_raw, gripper_closedness, hand_height    as given (frames made contiguous)
     finger_width, finger_effort, tip_xyz, tip_z    the values recorded at this step (the last record() since the previous call);
                                    tip_z is tip_xyz's z, or the given tip_z when the fingertip position is unknown
@@ -36,7 +39,7 @@ import numpy as np
 
 CONTROL_PREFIX = "memory/"
 CONTROL_KEYS = ("new_episode", "episode", "step", "oracle_prompt", "exterior_raw", "wrist_raw", "gripper_closedness",
-                "hand_height", "finger_width", "finger_effort", "tip_z", "tip_xyz", "proprio_steps", "signal_steps")
+                "hand_height", "finger_width", "finger_effort", "tip_z", "tip_xyz", "proprio_steps", "signal_steps", "objects")
 PROPRIO_COLUMNS = ("finger_width", "finger_effort", "tip_x", "tip_y", "tip_z")   # the columns of memory/proprio_steps
 POINTS = {"tip": ("tip_x", "tip_y", "tip_z")}                                    # positions the rules writer measures distances of
 
@@ -96,9 +99,11 @@ class ControlKeys:
             raise ValueError(f"unknown control keys {unknown}; the known keys are {CONTROL_KEYS}")
         self.start_episode()
 
-    def start_episode(self, episode_id: Any = None):
-        """A new episode: the next call() carries memory/new_episode True and the steps recorded from now on."""
+    def start_episode(self, episode_id: Any = None, objects: Sequence[str] | None = None):
+        """A new episode: the next call() carries memory/new_episode True and the steps recorded from now on. objects: the
+        names of the episode's objects, for a task whose episodes hold only some of the task's objects (memory/objects)."""
         self.episode_id = episode_id
+        self.objects = None if objects is None else [str(name) for name in objects]
         self._first_call_pending = True
         self._proprio_recorded = False   # whether any gripper or fingertip value was recorded in this episode
         self._reset_buffer()
@@ -141,7 +146,7 @@ class ControlKeys:
         return {CONTROL_PREFIX + key: value for key, value in values.items()}
 
     def _episode_keys(self, step: int) -> dict:
-        """new_episode (True at the first call of an episode), episode (when an id was given) and step."""
+        """new_episode (True at the first call of an episode), episode (when an id was given), step and objects (when given)."""
         keys = {}
         if "new_episode" in self.include:
             keys["new_episode"] = self._first_call_pending
@@ -149,6 +154,8 @@ class ControlKeys:
             keys["episode"] = self.episode_id
         if "step" in self.include:
             keys["step"] = int(step)
+        if "objects" in self.include and self.objects is not None:
+            keys["objects"] = list(self.objects)
         return keys
 
     def _given_keys(self, oracle_prompt, exterior_raw, wrist_raw, gripper_closedness, hand_height) -> dict:

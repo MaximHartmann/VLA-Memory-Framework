@@ -31,6 +31,15 @@ class GraspCycle:
         self.at_top = at_top
         self.reset()
 
+    def configure(self, trigger: str, parameters: dict) -> None:
+        """Take the thresholds of one rule: rise and at_top of a lift, release_below, up and away of a set_down. A task whose
+        verbs with the same trigger differ in them (putting an object into a container and stacking it) lets the monitor
+        switch them per skill."""
+        if trigger == "lift":
+            self.rise, self.at_top = parameters["rise"], parameters.get("at_top")
+        else:
+            self.release_below, self.up, self.away = parameters["release_below"], parameters["up"], parameters.get("away")
+
     def reset(self):
         """Back to the free state, with no grasp or release point remembered."""
         self.state = "free"

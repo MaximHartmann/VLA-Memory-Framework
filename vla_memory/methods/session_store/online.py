@@ -76,8 +76,9 @@ class TaskOrderMonitor(RuleMonitor):
 
 class RulesLabeller:
     """Labels the calls of an episode from the robot's own signals: the rules writer replayed over them gives the skill
-    pointer, the grasp cycle and a colour identification of the held object give the state of every object, and the
-    closedness and hand height give the gripper's."""
+    pointer, the grasp cycle and a colour identification of the held object give the state of every object (the task's
+    state_roles: resting, held at the grasp height, held lifted), and the closedness and hand height give the gripper's.
+    An episode that declares its objects is labelled for those objects, and each label names them."""
 
     name = "rules"
 
@@ -86,10 +87,15 @@ class RulesLabeller:
         self.identifier = make_identifier(task)
         self.monitor = TaskOrderMonitor(task, identifier=self.identifier)
         proprio = task.proprio or {}
+        self.objects = None       # the episode's objects when the environment declares them (set_objects)
         self.closed_threshold = float(proprio.get("closed_threshold", 0.3))
         self.high_above_table = float(high_above if high_above is not None else proprio.get("high_above_table", HIGH_ABOVE_TABLE))
         self.lifted_above_grasp = float(lifted_above if lifted_above is not None
                                         else proprio.get("lifted_above_grasp", LIFTED_ABOVE_GRASP))
+
+    def set_objects(self, objects) -> None:
+        """The objects of the coming episode (None: all of the task's)."""
+        self.objects = None if objects is None else self.task.episode_objects(objects)
 
     def label(self, calls: Sequence[Call]):
         """(the label of every call, whether the task is done at every call, the number of skills done at the end)."""
@@ -99,11 +105,14 @@ class RulesLabeller:
     def replay(self, calls: Sequence[Call]):
         """(labels, task done) per call, from the rules writer replayed over the calls' signals."""
         monitor, task = self.monitor, self.task
-        monitor.start_episode()
+        monitor.start_episode(objects=self.objects)
+        scene = task.episode_objects(self.objects)
         labels, done = [], []
         for call in calls:
             monitor.observe_rows(call.rows, call.step, image=call.wrist)
-            label = {task.field(name): "on_table" for name in task.objects}
+            label = {task.field(name): task.state_role("rest") for name in scene}
+            if self.objects is not None:
+                label["objects"] = list(self.objects)
             held = self._held(call)
             if held is not None:
                 label[task.field(held[0])] = held[1]
@@ -121,8 +130,8 @@ class RulesLabeller:
         return "closed" if call.closedness >= self.closed_threshold else "open"
 
     def _held(self, call: Call):
-        """(object, "held_lifted" or "held_at_table") when the gripper holds an object at this call, else None. The object is
-        the one the colour identifier sees in the wrist picture, else the current skill's."""
+        """(object, its held state: held_high when lifted, else held_low) when the gripper holds an object at this call, else
+        None. The object is the one the colour identifier sees in the wrist picture, else the current skill's."""
         cycle = self.monitor.cycle
         if not len(call.rows) or cycle.state not in ("holding", "lifted") or cycle.grasp_height is None:
             return None
@@ -130,8 +139,10 @@ class RulesLabeller:
         if not (cycle.empty_width < width < cycle.open_width and effort > cycle.squeeze_force and np.isfinite(height)):
             return None
         identified = self.identifier.identify(call.wrist) if self.identifier is not None and call.wrist is not None else None
+        if self.objects is not None and identified not in self.objects:
+            identified = None
         held_object = identified or self.task.parse_skill(self.monitor.current_skill)[1]
-        return held_object, ("held_lifted" if height - cycle.grasp_height > self.lifted_above_grasp else "held_at_table")
+        return held_object, self.task.state_role("held_high" if height - cycle.grasp_height > self.lifted_above_grasp else "held_low")
 
 
 class OracleLabeller(RulesLabeller):
@@ -186,6 +197,10 @@ class EpisodeRecorder:
         self.calls: list[Call] = []
         # the labels two calls must share to be near-duplicates
         self.fields = [task.field(name) for name in task.objects] + ["gripper", "gripper_high_above_table", "subgoal"]
+
+    def start_episode(self, objects=None) -> None:
+        """A new episode begins with these objects (None: all of the task's); they are the ones its calls are labelled for."""
+        self.labeller.set_objects(objects)
 
     def record(self, control_keys: dict, images, record: dict):
         """Keep one monitored call: its pictures and signals; `record` is the planner's record of the call (its step)."""

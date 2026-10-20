@@ -6,10 +6,11 @@ call's frames and prompt, which says whether the current skill is complete:
 
     reply["event_head"] = {"score": float, "done": bool, "threshold": float, "ms": time of the head pass}
 
-The writer keeps the plan (the task's skill order), the pointer (the lines written) and a counter of consecutive "done"
-verdicts on the current skill. After `consecutive` of them it writes the current skill's line: the pointer moves on and the
-counter starts again. A verdict arrives after its call's prompt was sent, so a line reaches the policy in the prompt of the
-next call. At most max_lines lines are written: the last skill has no line, as in the policy's training data.
+The writer keeps the plan (the task's skill order; of the episode's objects only when the environment declares them), the
+pointer (the lines written) and a counter of consecutive "done" verdicts on the current skill. After `consecutive` of them
+it writes the current skill's line: the pointer moves on and the counter starts again. A verdict arrives after its call's
+prompt was sent, so a line reaches the policy in the prompt of the next call. At most max_lines lines are written: the last
+skill has no line, as in the policy's training data.
 """
 from __future__ import annotations
 
@@ -49,9 +50,10 @@ class HeadWriter(Writer):
         self.max_lines = int(max_lines)
         self.start_episode()
 
-    def start_episode(self, instruction: str = "", episode_id=None) -> dict:
-        """Back to the first skill; the plan record names the task order as the plan's source."""
-        self.plan = list(self.default_plan)
+    def start_episode(self, instruction: str = "", episode_id=None, objects=None) -> dict:
+        """Back to the first skill of the plan (the task order of the episode's objects, when declared); the plan record names
+        the task order as the plan's source."""
+        self.plan = self.task.restrict_plan(self.default_plan, objects)
         self.skill_index = 0          # the lines written, and so the index of the current skill
         self.counter = 0              # consecutive "done" verdicts on the current skill
         self.done_all = False         # never true: the last skill has no line

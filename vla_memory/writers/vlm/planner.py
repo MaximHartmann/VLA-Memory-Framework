@@ -1,8 +1,9 @@
 """The planner: plans once per episode, monitors on every policy call, and holds the working memory of the episode.
 
     start_episode(instruction)      a text-only call: the model returns the ordered skill list under a JSON schema that
-                                    admits only the task's skills. If the call fails or a skill is outside the vocabulary,
-                                    the plan falls back to the task's skills in their listed order (logged as the source).
+                                    admits only the task's skills (those of the episode's objects, when the environment
+                                    declares them). If the call fails or a skill is outside the vocabulary, the plan falls
+                                    back to the task's skills in their listed order (logged as the source).
     observe(images, step, proprio)  on every policy call. With a memory store, the memory-vote gate may settle the call from
                                     the store alone; otherwise the model sees the plan, the completion rule of the current
                                     skill, the proprioception sentence, the retrieved examples and the current images, and
@@ -73,6 +74,7 @@ class Planner:
         self.gate_min_done = gate_min_done
         self.verdict_only = verdict_only
         self.extensions = list(extensions)
+        self.objects: list[str] | None = None   # the episode's objects when the environment declares them, else None: all of the task's
         self.schema = self._answer_schema()
         self.proprio = ProprioSummary.from_task(task)
         self._log_file = open(log, "a") if log else None
@@ -80,8 +82,8 @@ class Planner:
         self._reset(None)
 
     def _answer_schema(self) -> dict:
-        """The monitor's answer schema: the task's, changed by the extensions that need more fields."""
-        schema = self.task.monitor_schema(brief=self.brief, verdict_only=self.verdict_only)
+        """The monitor's answer schema: the task's, for the episode's objects, changed by the extensions that need more fields."""
+        schema = self.task.monitor_schema(brief=self.brief, verdict_only=self.verdict_only, objects=self.objects)
         for extension in self.extensions:
             schema = extension.answer_schema(schema)
         return schema
@@ -120,15 +122,27 @@ class Planner:
         return self.task.skills.index(self.current_skill)
 
     # ------------------------------------------------------------------ the plan
-    def start_episode(self, instruction: str, episode_id: str) -> dict:
-        """Ask the model for the plan of this episode. Returns the plan record (also written to the log)."""
+    def start_episode(self, instruction: str, episode_id: str, objects=None) -> dict:
+        """Ask the model for the plan of this episode (objects: the episode's objects, when the environment declares them).
+        Returns the plan record (also written to the log)."""
         self._reset(episode_id)
+        self._set_objects(objects)
         extra_text, fields = extension_plan_input(self, instruction)
-        record = {"event": "plan", "episode": episode_id, "instruction": instruction, **fields, "config": self.config()}
-        plan = ask_for_plan(self.vlm, self.task, instruction, extra_text, record)
-        self.plan = chosen_plan(self.task, plan, record)
+        record = {"event": "plan", "episode": episode_id, "instruction": instruction}
+        if self.objects is not None:
+            record["objects"] = list(self.objects)
+        record.update(fields, config=self.config())
+        plan = ask_for_plan(self.vlm, self.task, instruction, extra_text, record, self.objects)
+        self.plan = chosen_plan(self.task, plan, record, self.objects)
         self._log_record(record)
         return record
+
+    def _set_objects(self, objects) -> None:
+        """The objects of the new episode; the answer schema follows them (it is rebuilt only when they change)."""
+        declared = None if objects is None else self.task.episode_objects(objects)
+        if declared != self.objects:
+            self.objects = declared
+            self.schema = self._answer_schema()
 
     # ------------------------------------------------------------------ the monitor call
     def observe(self, images: Sequence[np.ndarray], step: int, proprio: dict | None = None) -> dict:
@@ -202,7 +216,7 @@ class Planner:
         """Optional recovery: a pick is active but another object is still held, so its put-down comes first."""
         if not (self.recovery and answer):
             return False
-        put_down = recovery_fix(self.task, answer, self.current_skill)
+        put_down = recovery_fix(self.task, answer, self.current_skill, self.objects)
         if put_down is None:
             return False
         self.plan.insert(self.skill_index, put_down)

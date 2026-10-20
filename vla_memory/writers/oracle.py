@@ -1,8 +1,10 @@
 """Two writers without a model: the simulator's ground truth (the reference) and none at all.
 
     oracle   the environment's ground-truth tracker sends the skill it considers current as memory/oracle_prompt; the
-             pointer is that skill's index in the task's skill order, set before the policy call. An oracle prompt that is
-             not one of the task's skills is forwarded to the policy as it is (passthrough), and the pointer stays.
+             pointer is that skill's index in the plan (the task's skill order), set before the policy call. An oracle
+             prompt that is not one of the plan's skills is forwarded to the policy as it is (passthrough), and the pointer
+             stays. In an episode whose objects the environment declares (memory/objects) the plan is the order in which
+             the tracker reports the skills: the skills reported before the current one are the completed ones.
              Simulation only: a real robot has no ground truth.
     off      no writer: the policy gets the environment's instruction unchanged and no step is ever completed
 """
@@ -25,12 +27,13 @@ class OracleWriter(Writer):
 
     def __init__(self, task):
         self.task = task
-        self.plan = list(task.skills)
         self._warned = False
         self.start_episode("", None)
 
-    def start_episode(self, instruction: str, episode_id) -> None:
-        """Back to the first skill; the oracle has no plan record."""
+    def start_episode(self, instruction: str, episode_id, objects: Sequence[str] | None = None) -> None:
+        """Back to the first skill of the episode's plan (the task order of its objects); the oracle has no plan record."""
+        self.plan = self.task.default_plan(objects)
+        self.reported = None if objects is None else []    # the skills reported so far, when the plan follows the reports
         self.skill_index = 0
         self.done_all = False      # the tracker never reports the task as finished
         self.passthrough = None
@@ -48,11 +51,19 @@ class OracleWriter(Writer):
             self._warned = True
         reported = text_of(call.control_keys.get("oracle_prompt", call.instruction))
         if reported in self.plan:
-            self.skill_index = self.plan.index(reported)
+            self._point_at(reported)
             self.passthrough = None
         else:
             self.passthrough = reported
         return {}
+
+    def _point_at(self, skill: str) -> None:
+        """The pointer goes to the reported skill. With declared objects a skill reported for the first time is appended to the
+        reported ones, and the plan becomes the reported skills followed by the rest of the task order."""
+        if self.reported is not None and skill not in self.reported:
+            self.reported.append(skill)
+            self.plan = self.reported + [other for other in self.plan if other not in self.reported]
+        self.skill_index = self.plan.index(skill)
 
 
 class OffWriter(Writer):

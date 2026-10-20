@@ -8,7 +8,8 @@ The environment sends its ordinary observation with the FULL instruction as `pro
 `memory/` prefix (vla_memory/env_keys.py). The relay strips them (only the episode markers also reach the policy, step
 4) and, at every call, in this order:
 
-    1. a new episode: the extensions, the method and the writer (its plan) start it
+    1. a new episode: the extensions, the method and the writer (its plan, for the objects the environment declares as
+       memory/objects) start it
     2. writer.before_call      a writer that decides from this call's inputs
     3. method.prompt           the prompt of this call shows that decision (with the writer "off": the instruction)
     4. method.before_policy    keys added to the observation (a picture)
@@ -141,7 +142,11 @@ class Relay:
         for extension in self.extensions:
             extension.start_episode(self.episode, control_keys)
         self.method.start_episode(self.episode, control_keys)
-        record = self.writer.start_episode(instruction, self.episode)
+        objects = control_keys.get("objects")      # the objects of this episode, when the environment declares them
+        if objects is None:
+            record = self.writer.start_episode(instruction, self.episode)
+        else:
+            record = self.writer.start_episode(instruction, self.episode, objects=objects)
         if record is not None:
             info.update(plan=record["plan"], plan_source=record["source"], plan_ms=record.get("ms"))
             log.info("episode %s plan (%s): %s", self.episode, record["source"], record["plan"])

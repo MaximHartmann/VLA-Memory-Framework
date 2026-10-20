@@ -5,8 +5,9 @@ pointer before the policy call (rule_monitor.RuleMonitor), so the prompt of the 
 
 The environment sends memory/proprio_steps (finger width, squeeze, fingertip x, y, z of every control step since the last
 call), and memory/signal_steps for a task whose `trigger: signals` rules use the task's declared signals. With
-history.object_from: colour, the wrist image (memory/wrist_raw) names the object at each pick (identify.py). The proxy's log
-record of a call: advanced, skill_index, completed (the skills completed at this call), writer_state, identified.
+history.object_from: colour, the wrist image (memory/wrist_raw) names the object at each pick (identify.py). For a task whose
+episodes hold only some of its objects the environment sends memory/objects, and the plan covers those objects. The proxy's
+log record of a call: advanced, skill_index, completed (the skills completed at this call), writer_state, identified.
 """
 from __future__ import annotations
 

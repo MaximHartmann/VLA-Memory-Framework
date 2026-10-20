@@ -222,7 +222,7 @@ class ExemplarStore(MemoryStore):
         pictures = ", ".join(f"Picture {camera_count * number + camera_index + 1}: {name}"
                              for camera_index, name in enumerate(self.camera_names))
         objects = ", ".join(f"{object_name} {task.object_noun} = {labels.get(task.field(object_name), 'unsure')}"
-                            for object_name in task.objects)
+                            for object_name in labels.get("objects", task.objects))   # an entry may name the objects of its episode
         # the task's state fields (the reference task: "gripper = open, gripper high above table = false")
         state = "".join(f", {field.replace('_', ' ')} = {_label_text(labels[field])}" for field in task.state_fields() if field in labels)
         return (f"Example {number + 1} ({pictures}): {objects}{state}; "

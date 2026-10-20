@@ -16,13 +16,16 @@ COMBINE = ("the scene NOW. Combine the proprioception with what you see: the cam
 
 
 # ---------------------------------------------------------------------- the plan request
-def plan_messages(task: TaskSpec, instruction: str, extra_text: str = "") -> list[dict]:
-    """The chat messages of the plan request. extra_text: lines an extension adds to the request."""
+def plan_messages(task: TaskSpec, instruction: str, extra_text: str = "", objects=None) -> list[dict]:
+    """The chat messages of the plan request. extra_text: lines an extension adds to the request. objects: the objects of the
+    episode when the environment declares them; the request then names them and lists the skills of those objects only."""
     user = f"Instruction: \"{instruction}\"\n"
+    if objects is not None:
+        user += f"Objects in the scene: {', '.join(task.episode_objects(objects))}.\n"
     if extra_text:
         user += extra_text + "\n"
     user += "Return the ordered skill list as JSON."
-    return [{"role": "system", "content": task.plan_system_text()}, {"role": "user", "content": user}]
+    return [{"role": "system", "content": task.plan_system_text(objects)}, {"role": "user", "content": user}]
 
 
 # ---------------------------------------------------------------------- the monitor question's text
@@ -47,15 +50,16 @@ def pictures_text(first_picture: int, two_cameras: bool) -> str:
     return f"Picture {first_picture} (external camera) shows"
 
 
-def ask_text(task: TaskSpec, verdict_only: bool) -> str:
-    """The question's last sentence: the verdict alone, or the object states first."""
+def ask_text(task: TaskSpec, verdict_only: bool, objects=None) -> str:
+    """The question's last sentence: the verdict alone, or the object states first (of the episode's objects)."""
     if verdict_only:
         return "Decide whether the current skill is complete."
-    if len(task.objects) <= 2:
-        objects = " and ".join(f"{object_name} {task.object_noun}" for object_name in task.objects)
+    names = task.episode_objects(objects)
+    if len(names) <= 2:
+        listed = "the " + " and ".join(f"{object_name} {task.object_noun}" for object_name in names)
     else:
-        objects = "every " + task.object_noun
-    return f"Report the state of the {objects} and the gripper, then decide whether the current skill is complete."
+        listed = "every " + task.object_noun
+    return f"Report the state of {listed} and the gripper, then decide whether the current skill is complete."
 
 
 def question_text(task: TaskSpec, plan: Sequence[str], index: int, criterion_extra: str, proprio_text: str,
@@ -88,7 +92,7 @@ def monitor_messages(planner, pictures: list, hits: list, record: dict) -> list[
     two_cameras = len(pictures) >= 2
     text = question_text(planner.task, planner.plan, planner.skill_index, _extension_criterion_text(planner, skill, record),
                          planner.proprio.text(), join_texts(planner.extensions, "state_text"), picture_count + 1, two_cameras,
-                         ask_text(planner.task, planner.verdict_only) + join_texts(planner.extensions, "ask_text"),
+                         ask_text(planner.task, planner.verdict_only, planner.objects) + join_texts(planner.extensions, "ask_text"),
                          bool(hits) or bool(extension_items))
     items.append({"type": "text", "text": text})
     for picture in pictures:

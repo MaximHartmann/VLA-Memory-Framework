@@ -8,6 +8,9 @@ Episode files (.npz), one per episode:
                               simulation, the per-frame labels of the training demonstrations, or a person's annotation
     signal_<name> (T,) float  optional: a signal the task declares (task file `signals`) for its `trigger: signals` rules,
                               e.g. signal_contact_force
+    objects    (n,) str       optional: the names of the episode's objects, for a task whose episodes hold only some of the
+                              task's objects (the plan is the task order of those objects; the lines are then numbered, as
+                              their skills differ from episode to episode)
 The writer at step t has seen rows[0..t]. Its history is compared with the reference at the policy calls t = 0, k, 2k, ...
 (k = --call-every; 1 compares every frame, e.g. against demonstration labels).
 
@@ -68,14 +71,16 @@ def validate(task: TaskSpec, episodes: Iterable[dict], call_every: int = 8, **gr
     calls_equal = 0
     calls_total = 0
     episode_count = 0
+    declared_objects = False
     for episode in episodes:
         equal, calls = _compare_episode(monitor, episode, cap, call_every, per_line)
         calls_equal += equal
         calls_total += calls
         episode_count += 1
+        declared_objects = declared_objects or episode.get("objects") is not None
     lines = {}
     for line, counts in per_line.items():
-        lines[monitor.plan[line - 1]] = _line_summary(counts)
+        lines[f"line {line}" if declared_objects else monitor.default_plan[line - 1]] = _line_summary(counts)
     return {"episodes": episode_count, "calls": calls_total, "calls_equal": calls_equal,
             "agreement": calls_equal / max(calls_total, 1), "call_every": call_every, "lines": lines}
 
@@ -85,7 +90,7 @@ def _compare_episode(monitor: RuleMonitor, episode: dict, cap: int, call_every: 
     Returns (calls at which the histories are equal, calls)."""
     rows = np.asarray(episode["rows"], float)
     reference = np.minimum(np.asarray(episode["reference"], int), cap)
-    writer = np.minimum(monitor.label_rows(rows, signals=episode_signals(episode) or None), cap)
+    writer = np.minimum(monitor.label_rows(rows, signals=episode_signals(episode) or None, objects=episode.get("objects")), cap)
     calls = np.arange(0, len(writer), max(1, int(call_every)))
     for line, counts in per_line.items():
         _count_switch(counts, _first_call(writer, calls, line), _first_call(reference, calls, line))
@@ -125,6 +130,8 @@ def load_episodes(pattern: str):
         for key in data.files:
             if key.startswith(SIGNAL_PREFIX):
                 episode[key] = data[key]
+        if "objects" in data.files:
+            episode["objects"] = [str(name) for name in data["objects"]]
         yield episode
 
 

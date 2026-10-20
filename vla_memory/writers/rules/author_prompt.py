@@ -23,8 +23,8 @@ from .rules import TRIGGERS
 
 SYSTEM = """\
 You configure the history writer of a robot arm that is driven by a learned policy (a vision-language-action model). The \
-policy receives the task instruction plus a short history of the skills completed so far, for example "<instruction> \
-History: picked up the red block." The history writer adds a line when a skill is complete. It uses no model and no camera: \
+policy receives the task instruction plus a short history of the skills completed so far, for example "{example}". The \
+history writer adds a line when a skill is complete. It uses no model and no camera: \
 it is a fixed rule engine on the robot's own gripper and hand signals, and you write its rules for one task. For each verb \
 of the task you choose which of the engine's two triggers completes it, and the trigger's thresholds.
 
@@ -117,8 +117,9 @@ def _system_text(task: TaskSpec, control_hz, call_every, late_ok_s, gripper_over
     per_s = f" (at {control_hz:g} Hz, 0.1 cm per step is {0.1 * control_hz:g} cm/s)" if control_hz else ""
     late = f" A line that appears up to about {late_ok_s:g} s late costs nothing." if late_ok_s else ""
     force = f"{gripper['squeeze_force']:g} (a force in N, or 0.5 for a grasped flag)"
+    example = HistoryPrompt(task).render("<instruction>", task.skills[:1])   # the task's own phrase of its first skill
     return SYSTEM.format(rate=rate, open_cm=centimetre_text(gripper["open_width"]), empty_cm=centimetre_text(gripper["empty_width"]),
-                         force=force, call=call, per_s=per_s, late=late)
+                         force=force, call=call, per_s=per_s, late=late, example=example)
 
 
 def _task_text(task: TaskSpec) -> list[str]:

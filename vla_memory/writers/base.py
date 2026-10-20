@@ -1,15 +1,15 @@
 """Writers: the components that signal that a step of the task is done.
 
-A writer keeps the plan (the task's skills in order: the VLM planner's plan, or the task's skill order) and a forward-only
-pointer, and moves the pointer when it decides that the current skill is complete. The methods (methods/) turn that state
+A writer keeps the plan (the VLM planner's plan, or the task order of the episode's objects) and a forward-only pointer,
+and moves the pointer when it decides that the current skill is complete. The methods (methods/) turn that state
 into what the policy receives: the current skill as the prompt, the instruction with a line per completed skill, or the
 picture of the moment a skill was completed. Every writer drives every method.
 
 Timing: a writer decides either before the policy call, from the call's inputs (before_call), so that the prompt of the
 same call shows it, or after it, from the policy's reply (after_call), so that it shows from the next call on.
 
-    Writer       the interface: plan, skill_index, done_all, current_skill, completed(), start_episode, before_call,
-                 after_call, monitor (what the extensions see)
+    Writer       the interface: plan, skill_index, done_all, current_skill, completed(), start_episode(instruction,
+                 episode_id, objects), before_call, after_call, monitor (what the extensions see)
     Call         what before_call sees of one policy call: the instruction, the control keys, the observation
     WRITERS      registered name -> class or import path; resolve_writer(name) for --writer
 """
@@ -98,8 +98,10 @@ class Writer:
             return list(self.plan)
         return list(self.plan[:self.skill_index])
 
-    def start_episode(self, instruction: str, episode_id) -> dict | None:
-        """A new episode: reset, and return the plan record (plan, source, ms), or None for a writer without a plan."""
+    def start_episode(self, instruction: str, episode_id, objects: Sequence[str] | None = None) -> dict | None:
+        """A new episode: reset, and return the plan record (plan, source, ms), or None for a writer without a plan. objects:
+        the objects of this episode when the environment declares them (memory/objects; the relay passes the argument only
+        then), else the task's objects: the plan covers these objects only (TaskSpec.default_plan, restrict_plan)."""
         return None
 
     def before_call(self, call: Call, extensions: Sequence = ()) -> dict:

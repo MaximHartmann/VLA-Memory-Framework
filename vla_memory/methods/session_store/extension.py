@@ -121,6 +121,11 @@ class SessionStoreExtension(Extension):
         """The store, as the planner's long-term memory."""
         return self.store
 
+    def start_episode(self, episode: str, control_keys: dict) -> None:
+        """The objects of the new episode, when the environment declares them, are the ones its calls are labelled for."""
+        if self.recorder is not None:
+            self.recorder.start_episode(control_keys.get("objects"))
+
     def plan_request(self, instruction: str):
         """The new episode's instruction becomes the retrieval's context; the plan request itself is not changed."""
         self.store.set_context(instruction=instruction)

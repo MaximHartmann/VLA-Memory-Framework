@@ -9,7 +9,7 @@ Timing: a writer decides either before the policy call, from the call's inputs (
 same call shows it, or after it, from the policy's reply (after_call), so that it shows from the next call on.
 
     Writer       the interface: plan, skill_index, done_all, current_skill, completed(), start_episode(instruction,
-                 episode_id, objects), before_call, after_call, monitor (what the extensions see)
+                 episode_id, objects), before_call, after_call, monitor (what the extensions see), metadata()
     Call         what before_call sees of one policy call: the instruction, the control keys, the observation
     WRITERS      registered name -> class or import path; resolve_writer(name) for --writer
 """
@@ -110,6 +110,10 @@ class Writer:
 
     def after_call(self, reply: dict) -> dict:
         """After the policy call: decide from the policy's reply. Returns fields for the proxy's log."""
+        return {}
+
+    def metadata(self) -> dict:
+        """Entries for the proxy's metadata (what the environment client is told): the writer's own settings; empty: none."""
         return {}
 
 

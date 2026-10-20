@@ -32,6 +32,8 @@ python -m vla_memory.proxy --writer oracle --method subgoal --listen-port <port>
 every log record holds the call's oracle prompt (`oracle_prompt`). Without `memory/oracle_prompt` the writer forwards the
 instruction and says so once in the log.
 
+A walkthrough of the code, from the command line to the last policy call: [detailed/README.md](detailed/README.md).
+
 ## Our findings
 
 Reference task: pick up and put back a red and then a blue cube with a Franka arm in Isaac Sim, pi0.5 policies; 100 fresh

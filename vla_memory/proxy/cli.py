@@ -183,9 +183,8 @@ def component_metadata(args) -> dict:
 
 def proxy_metadata(args, task: TaskSpec, writer, method, extensions: Sequence[Extension]) -> dict:
     """What the environment client is told about the proxy when it connects."""
-    metadata = {"proxy": Relay.__module__, "mode": writer.name, "method": method.name, "task": task.name,
-                "vlm": getattr(args, "vlm_model", None) if writer.name == "vlm" else None,
-                "memory": getattr(args, "memory", None), "k": getattr(args, "k", None)}
+    metadata = {"proxy": Relay.__module__, "mode": writer.name, "method": method.name, "task": task.name}
+    metadata.update(writer.metadata())
     metadata.update(component_metadata(args))
     metadata.update(method.metadata())
     for extension in extensions:

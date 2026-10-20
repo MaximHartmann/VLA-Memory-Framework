@@ -45,10 +45,10 @@ What else a run needs:
 ### Run: a writer and a method
 
 ```
-python -m vla_memory.proxy --writer NAME --method NAME --listen-port <port> --upstream-port <policy port>
+python -m vla_memory.proxy --writer NAME --method NAME --task FILE --listen-port <port> --upstream-port <policy port>
 ```
 
-The proxy listens on `<port>` and forwards to the policy server on `<policy port>`. The environment connects to `<port>`
+`--task` names the task file (below); for the reference task it can be left out. The proxy listens on `<port>` and forwards to the policy server on `<policy port>`. The environment connects to `<port>`
 instead of the policy server and otherwise runs as before: it sends the full task instruction as the prompt, plus entries
 for the proxy whose names start with `memory/`, for example that a new episode starts or the gripper's readings since the
 previous call. `vla_memory/env_keys.py` builds these entries from the environment's raw signals. The proxy removes them

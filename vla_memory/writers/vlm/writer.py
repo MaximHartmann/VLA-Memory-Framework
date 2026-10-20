@@ -23,6 +23,7 @@ class VlmWriter(Planner, Writer):
     """The Planner behind the writer interface: before_call hands it the pictures and the proprioception of the call."""
 
     name = "vlm"
+    settings: dict | None = None    # the planning model, the exemplar store and k, for the proxy's metadata (set by build)
 
     @classmethod
     def add_arguments(cls, parser):
@@ -44,8 +45,13 @@ class VlmWriter(Planner, Writer):
                      gate_min_done=args.gate_min_done, verdict_only=args.verdict_only,
                      log=(args.log + ".planner.jsonl") if args.log else None,
                      log_memory=memory_from(extensions) is not None, extensions=extensions)
+        writer.settings = {"vlm": args.vlm_model, "memory": args.memory, "k": args.k}
         log_planner_configuration(args, store)
         return writer
+
+    def metadata(self) -> dict:
+        """The planning model (--vlm-model), the exemplar store file (--memory) and the examples per question (--k)."""
+        return dict(self.settings or {})
 
     def before_call(self, call: Call, extensions: Sequence = ()) -> dict:
         """One policy call: observe the pictures and the proprioception, with the extensions' hooks around the decision."""

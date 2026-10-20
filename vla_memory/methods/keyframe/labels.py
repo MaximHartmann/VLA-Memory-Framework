@@ -18,10 +18,10 @@ from typing import Sequence
 WINDOW = 16          # the keyframe is drawn from the 16 frames after the event's boundary, the boundary itself included
 
 
-def history_counts(prompts: Sequence[str], instruction: str, history) -> list[int]:
+def history_counts(prompts: Sequence[str], instruction: str, history, plan: Sequence[str] | None = None) -> list[int]:
     """The number of history lines of every frame's prompt; history: a HistoryPrompt of the task. Every prompt must be the
-    instruction followed by a history of the task's skills in order."""
-    skills = history.task.skills
+    instruction followed by a history of the plan's skills in order (default: the task's skills)."""
+    skills = tuple(plan) if plan else history.task.skills
     rendered = {history.render(instruction, skills[:k]): k for k in range(len(skills) + 1)}
     counts = []
     for prompt in prompts:

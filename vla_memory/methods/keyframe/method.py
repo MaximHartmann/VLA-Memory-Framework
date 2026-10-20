@@ -11,8 +11,8 @@ the policy's wrist image, reported once) becomes the keyframe, and from then on 
 observation/memory_image, which the policy reads in its third image slot (the dataset: training/relabel_keyframe.py). Before
 the first event nothing is sent and the slot stays masked out, as on the training frames before the first event. A new
 episode clears the keyframe; events after the N-th (default: the task's history.max_lines) do not replace it. Mode off is
-the no-keyframe control: the keyframe is taken and logged, never sent. With --keyframe-placed-later the placing event's
-keyframe waits for the hand to rise (placed.py).
+the no-keyframe control: the keyframe is taken and logged, never sent. With --keyframe-placed-later the keyframe of a
+placing event (a skill of one of the task's placing verbs) waits for the hand to rise (placed.py).
 
 Every proxy log record carries keyframe_mode and, under "keyframe": source (the writer), events (the count, capped at N),
 stored (a keyframe was taken at this call), event (the event of the current keyframe, None before the first), step
@@ -70,10 +70,10 @@ class KeyframeMethod(Method):
         image_keys = getattr(args, "image_keys", None) or ("observation/image", DEFAULT_WRIST_IMAGE_KEY)
         max_events = args.keyframe_max_events
         if max_events is None:
-            max_events = (task.history or {}).get("max_lines", 3)
+            max_events = (task.history or {}).get("max_lines", len(task.skills) - 1)
         placed_later = None
         if args.keyframe_placed_later:
-            placed_later = PlacedLater(args.keyframe_placed_height, args.keyframe_placed_calls)
+            placed_later = PlacedLater.for_task(task, args.keyframe_placed_height, args.keyframe_placed_calls)
         wrist_image_key = image_keys[1] if len(image_keys) > 1 else None
         return cls(task, args.keyframe_mode, max_events, wrist_image_key, placed_later)
 
@@ -122,7 +122,7 @@ class KeyframeMethod(Method):
             if events > self.event:
                 record.update(self._take(observation, control_keys, events))
         else:
-            record.update(self._take_later(observation, control_keys, events))
+            record.update(self._take_later(observation, control_keys, events, writer))
         sent = self.keyframe is not None and self.mode == "normal"
         if sent:
             observation[MEMORY_IMAGE] = self.keyframe
@@ -144,8 +144,8 @@ class KeyframeMethod(Method):
         self.taken += 1
         return {"stored": True, "frame": "fallback" if fallback else "raw"}
 
-    def _take_later(self, observation: dict, control_keys: dict, events: int) -> dict:
-        """As _take, except for the placing event, whose keyframe waits for the hand; a later event drops a waiting one."""
+    def _take_later(self, observation: dict, control_keys: dict, events: int, writer) -> dict:
+        """As _take, except for a placing event, whose keyframe waits for the hand; a later event drops a waiting one."""
         rule = self.placed_later
         height = rule.fingertip_height(observation)
         if height is None:
@@ -153,7 +153,7 @@ class KeyframeMethod(Method):
                                      "taken by the fallback only")
         info = {"height": height}
         fields = {}
-        if events > self.event and events == rule.event:
+        if events > self.event and rule.is_placing(events, writer, self.task):
             fields.update(self._wait_for_hand(observation, control_keys, events, height, info))
         elif events > self.event:
             if rule.pending is not None:

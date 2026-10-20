@@ -96,6 +96,12 @@ policy call every 8 steps:
 - The gain lives in the state: cleared before every call, every memory policy trained on interventions falls to 0-3 of 100.
   In the best one a linear probe reads the task phase from the state with a balanced accuracy of 0.99, from the current
   call's summary with 0.78.
+- The state is used for the right reason. In a counterfactual test at two moments that look almost the same, the best
+  memory policy followed the history its state carried: a state saying "nothing done yet", put in after red was placed
+  back, sent the robot back to red in 70 % of the cases (never with its own state); a state saying "red done", put in
+  before red was lifted, sent it to the blue block first in 41 % (1 % with its own). A state taken from another episode
+  with the right history worked like the robot's own (59 and 53 full tasks against 57), so the content of the state
+  decides, not where it comes from. An implanted history lasted a median 33 and 21 policy calls.
 - More training cycles on the same data raised the policy with the phase head from 39 to 51 and 60; a fourth cycle gave 51
   (not significantly different). A second round of interventions recorded with the memory policy driving gave 65 against
   51 for that matched-steps control (paired sign test, p = 0.029); the difference opens between red and blue (reached blue

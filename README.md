@@ -29,7 +29,9 @@ The environment connects to `<port>` instead of the policy server and otherwise 
 instruction as the prompt and its control keys under `memory/` (`vla_memory/env_keys.py` builds them). A writer that decides
 from the call's inputs moves its pointer before the policy call, so the policy's input of the same call shows the decision;
 a writer that decides from the policy's reply shows it from the next call on. The skills, their completion rules and the
-prompt texts come from a task file (`vla_memory/tasks/red_blue_blocks.yaml`).
+prompt texts come from a task file (`vla_memory/tasks/red_blue_blocks.yaml`). Where the objects of a task vary from episode to
+episode, the environment names the episode's objects (`memory/objects`) and the writers plan the task order of those objects;
+the task file gives each verb its own skill wording (`skill_templates`) and may order the plan in stages (`plan_stages`).
 
 | writer | who decides that a skill is complete | real robot | page |
 |---|---|---|---|
@@ -46,21 +48,7 @@ prompt texts come from a task file (`vla_memory/tasks/red_blue_blocks.yaml`).
 
 `--writer off` hands the policy the instruction unchanged.
 
-### Measured results
-
-Full tasks out of 100 fresh seeds on the reference task: pick up and put back a red and then a blue cube with a Franka arm
-in Isaac Sim; a pi0.5 policy trained for each method; 500 control steps, a policy call every 8 steps. An empty cell: the
-combination is supported but was not measured.
-
-| method \ writer | `oracle` | `rules` | `vlm` | `head` |
-|---|---|---|---|---|
-| `subgoal` | 92 | 94 | 94 | |
-| `history` | 82 | 79 | 77 | 78 |
-| `keyframe` | 78 | 75 | | |
-
-For each method the writers are within noise of each other; the memoryless policy, trained on the full instruction, completes
-11. The VLM writer ran without a store with the sub-goal method (87 with a store of 20 recorded episodes) and with that store
-with the history method. The pages give the conditions, the timing and what failed.
+The measured results of the writer and method combinations on the reference task are on [their own page](docs/results/README.md).
 
 ## What the policy must accept
 

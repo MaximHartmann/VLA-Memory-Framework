@@ -5,9 +5,9 @@
     strip_memory("pick up the red block. memory: release at step 1, up 2 cm")
         -> "pick up the red block"
 
-The training prompts have exactly this format, and the control policy's input transform removes the memory at the same
-marker (MEMORY_MARKER and strip_memory in red_blue_policy.py of training/openpi/openpi_changes.patch). A skill prompt never
-contains the marker.
+The training prompts (training/relabel_memory.py) have exactly this format, and strip_memory cuts a prompt back to the skill
+at the same marker, which is how a policy trained on the same frames without the memory (the control) reads them. A skill
+prompt never contains the marker.
 """
 from __future__ import annotations
 

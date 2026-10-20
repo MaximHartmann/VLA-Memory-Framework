@@ -25,8 +25,7 @@ is a drop-in replacement for the policy behind any writer and method.
    reference run).
 3. **Convert** them like demonstrations and **mix** in original demonstrations as replay against drift (40 of 221 episodes).
 4. **Fine-tune** from the parent's weights with the same LoRA settings, a short schedule and a lower learning rate
-   (`training/README.md`, "How to train", the config `pi05_red_blue_v2_subgoal_recap`; the reference run: 5000 steps, 1e-5
-   to 1e-6, cosine).
+   (`training/README.md`, "How to train"; the reference run: 5000 steps, learning rate 1e-5 to 1e-6, cosine).
 5. **Select** the checkpoint on development seeds and evaluate it like every other policy. It replaces the parent behind
    the proxy (`--upstream-port` of the new policy server); the writer, the method and the store stay the same.
 

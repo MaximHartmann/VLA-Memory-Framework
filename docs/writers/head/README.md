@@ -25,8 +25,7 @@ policy's own rollouts, labelled by another writer, here the rules writer. The id
   ([the history method](../../methods/history/README.md)).
 - Recorded rollouts of that policy, not demonstrations: the camera frames of every control step and either the signals the
   rules writer reads (finger width, squeeze, fingertip position) or a reference count of completed skills per step.
-- The openpi environment with our changes (`training/openpi/`) and one GPU for the features of the fit and for serving; the
-  fit itself runs on the CPU with numpy.
+- The openpi environment and one GPU for the features of the fit and for serving; the fit itself runs on the CPU with numpy.
 
 ## How to use it in the framework
 
@@ -36,22 +35,23 @@ policy's own rollouts, labelled by another writer, here the rules writer. The id
 2. **Fit the head:**
 
    ```
-   python training/fit_event_head.py --episodes 'rollouts/*.npz' --config pi05_red_blue_v2_history \
+   python training/fit_event_head.py --episodes 'rollouts/*.npz' --config <policy config> \
        --checkpoint <checkpoint dir> --center-crop 0.95 --features rows.npz --out <head dir> [--jax-cache DIR]
    ```
 
-   The rows are every 4th frame: negatives show the skill in progress with the correct history, positives the first 24
-   frames after a skill was completed with the history that still lacks its line. The frozen policy computes their
-   features; the fit is a logistic regression with balanced class weights, its L2 penalty chosen by a 5-fold
-   cross-validation over episodes, and the threshold that 1 % of the out-of-fold negatives reach. The head directory holds
-   `head.npz` (weights, bias, the features' mean and standard deviation, threshold, N, layer, pooling), `head.json` (how it
-   was fitted) and `head.sha256` (checked whenever the head is loaded). No fitted head and no policy checkpoint is
-   distributed with the repository; these two steps produce them.
+   `--config` is the policy's openpi training config and `--center-crop` the centre crop of the exterior picture that the
+   reference policy runs at inference (0.95), the same at the fit and at the server. The rows are every 4th frame: negatives
+   show the skill in progress with the correct history, positives the first 24 frames after a skill was completed with the
+   history that still lacks its line. The frozen policy computes their features; the fit is a logistic regression with
+   balanced class weights, its L2 penalty chosen by a 5-fold cross-validation over episodes, and the threshold that 1 % of
+   the out-of-fold negatives reach. The head directory holds `head.npz` (weights, bias, the features' mean and standard
+   deviation, threshold, N, layer, pooling), `head.json` (how it was fitted) and `head.sha256` (checked whenever the head is
+   loaded). No fitted head and no policy checkpoint is distributed with the repository; these two steps produce them.
 3. **Serve the policy with its head** (openpi environment); every reply then carries
    `event_head: {score, done, threshold, ms}`:
 
    ```
-   python -m vla_memory.writers.head.server --port <server port> --config pi05_red_blue_v2_history \
+   python -m vla_memory.writers.head.server --port <server port> --config <policy config> \
        --checkpoint <checkpoint dir> --center-crop 0.95 --head-dir <head dir> [--head-batch 8] [--jax-cache DIR]
    ```
 

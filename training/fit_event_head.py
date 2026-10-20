@@ -19,7 +19,7 @@ The steps:
    --features file goes straight to the fit, without openpi and without a GPU;
 3. the fit (CPU): head_fit.fit_head; the head is saved to --out (head_file: head.npz, head.json, head.sha256).
 
-    python training/fit_event_head.py --episodes 'rollouts/*.npz' --config pi05_red_blue_v2_history \
+    python training/fit_event_head.py --episodes 'rollouts/*.npz' --config <policy config> \
         --checkpoint <checkpoint dir> --center-crop 0.95 --features rows.npz --out <head dir>
 
 Images are letterboxed to --image-size before the policy's input transform, as the reference environment sends them. With

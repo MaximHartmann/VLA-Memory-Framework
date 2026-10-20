@@ -1,8 +1,8 @@
 """The policy server of the event-head writer: openpi's websocket policy server, with the head's verdict in every reply.
 
-Runs in the openpi environment (openpi with our changes, training/openpi/) with the framework on PYTHONPATH:
+Runs in the openpi environment with the framework on PYTHONPATH:
 
-    python -m vla_memory.writers.head.server --port <port> --config pi05_red_blue_v2_history \
+    python -m vla_memory.writers.head.server --port <port> --config <policy config> \
         --checkpoint <checkpoint dir> --head-dir <head dir> [--center-crop 0.95] [--head-batch 8] [--jax-cache DIR]
 
 Every call runs the policy's infer() unchanged. An identity wrapped around its input transform keeps the transformed
@@ -21,6 +21,7 @@ import argparse
 import logging
 import time
 
+from .crop import CenterCrop
 from .file import load_head
 
 log = logging.getLogger("vla_memory.writers.head.server")
@@ -88,14 +89,15 @@ def use_compilation_cache(directory: str) -> None:
 
 
 def create_policy(args):
-    """The trained policy as openpi's serve_policy.py creates it, with the optional centre crop."""
-    from openpi import transforms
+    """The trained policy as openpi's serve_policy.py creates it, with the optional centre crop (crop.py) added behind its
+    input transforms."""
     from openpi.policies import policy_config
     from openpi.training import config as openpi_config
-    extra_transforms = [transforms.CenterCropResizeImages(args.center_crop)] if args.center_crop else []
     train_config = openpi_config.get_config(args.config)
-    policy = policy_config.create_trained_policy(train_config, args.checkpoint, default_prompt=args.default_prompt,
-                                                 extra_input_transforms=extra_transforms)
+    policy = policy_config.create_trained_policy(train_config, args.checkpoint, default_prompt=args.default_prompt)
+    if args.center_crop:
+        input_transform, crop = policy._input_transform, CenterCrop(args.center_crop)
+        policy._input_transform = lambda data: crop(input_transform(data))
     return policy, train_config
 
 

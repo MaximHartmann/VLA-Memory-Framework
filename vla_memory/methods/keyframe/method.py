@@ -8,11 +8,11 @@ The events are the writer's completed skills (picked up red, placed red, picked 
 call, after the writer's before_call: when the count has grown since the keyframe was taken, the call's raw wrist frame
 (memory/wrist_raw, 240 x 320 x 3 uint8 in the reference bench, the kind of picture the training keyframes are; without it
 the policy's wrist image, reported once) becomes the keyframe, and from then on every observation carries it as
-observation/memory_image, which the policy's input transform puts into its third image slot with the mask on
-(RedBlueMemoryInputs of pi05_red_blue_v2_keyframe). Before the first event nothing is sent and the slot stays masked out,
-as on the training frames before the first event. A new episode clears the keyframe; events after the N-th (default: the
-task's history.max_lines) do not replace it. Mode off is the no-keyframe control: the keyframe is taken and logged, never
-sent. With --keyframe-placed-later the placing event's keyframe waits for the hand to rise (placed.py).
+observation/memory_image, which the policy reads in its third image slot (the dataset: training/relabel_keyframe.py). Before
+the first event nothing is sent and the slot stays masked out, as on the training frames before the first event. A new
+episode clears the keyframe; events after the N-th (default: the task's history.max_lines) do not replace it. Mode off is
+the no-keyframe control: the keyframe is taken and logged, never sent. With --keyframe-placed-later the placing event's
+keyframe waits for the hand to rise (placed.py).
 
 Every proxy log record carries keyframe_mode and, under "keyframe": source (the writer), events (the count, capped at N),
 stored (a keyframe was taken at this call), event (the event of the current keyframe, None before the first), step

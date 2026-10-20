@@ -8,6 +8,7 @@ verdicts in a row the writer completes the skill. See docs/writers/head/README.m
   rows                 the training rows of a recorded episode: probe_rows
   fit                  the fit: balanced logistic regression, L2 by cross-validation, threshold (fit_head)
   features             the policy's representation of a call, the head's input (openpi environment)
+  crop                 CenterCrop, the centre crop of the exterior picture the server and the fit apply at inference
   server               the policy server with the head's verdict in every reply (openpi environment;
                        python -m vla_memory.writers.head.server)
 """

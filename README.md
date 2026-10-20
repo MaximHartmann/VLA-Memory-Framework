@@ -62,6 +62,32 @@ For each method the writers are within noise of each other; the memoryless polic
 11. The VLM writer ran without a store with the sub-goal method (87 with a store of 20 recorded episodes) and with that store
 with the history method. The pages give the conditions, the timing and what failed.
 
+## What the policy must accept
+
+Any VLA policy works behind the proxy if it was trained on the inputs its method and extensions produce. The writer only
+decides when a skill is complete, so what the policy reads follows from the method and the extensions. Each row below names
+the script in `training/` that builds the matching training dataset, in LeRobot format, from recorded demonstrations
+(`training/README.md`). The strings in the training data are the ones the proxy sends at run time, which the task file defines.
+
+| in the run | the policy must accept | training data |
+|---|---|---|
+| `--writer off` | the full instruction as the prompt (the memoryless policy) | `convert_to_lerobot.py` |
+| `--method subgoal` | short skill prompts, one at a time ("pick up the red block") | `relabel_subgoals.py` |
+| `--method history` | the full instruction followed by " History: <completed skills>" ("... History: picked up the red block.") | `relabel_history.py` |
+| `--method keyframe` | the plain instruction and a third picture, `observation/memory_image`: the wrist picture of the last key moment, masked out until the first event | `relabel_keyframe.py` |
+| `--with memory_policy` (with `--method subgoal`) | the third picture, the wrist picture of a retrieved moment, and the skill prompt with ". memory: <sentence>" appended | `relabel_memory.py` |
+| `--with notebook` | nothing extra: it changes which of the task's skills the VLM writer plans and when it moves on | |
+| `--with session_store` | nothing extra: it is the memory of the VLM writer's monitor | |
+| `--writer oracle`, `rules`, `vlm` | nothing from the policy | |
+| `--writer head` | its internal features go to the head: the head's server reads them and returns a verdict with every reply; as shipped it reads those of an openpi pi0.5 policy, so it runs on openpi policies only | `fit_event_head.py` fits the head on the policy's rollouts |
+
+The proxy reaches the policy through the openpi serving protocol: msgpack-encoded numpy arrays over a websocket, through the
+`openpi_client` library. It reads the server's metadata once and then sends one observation per policy call: the environment's
+own keys (the reference: `observation/image`, `observation/wrist_image`, `observation/state`) with the `prompt` the method
+decided and, for a third picture, `observation/memory_image`. It expects a dict with `actions` back. A server that speaks this
+protocol, such as openpi's `serve_policy.py`, needs nothing else; for another protocol, `--transport` names a class with an
+`infer(observation)` method that returns `{"actions": ...}` (`vla_memory/transport.py`).
+
 ## Other methods
 
 | method | memory used | how it plugs in | page |
@@ -69,6 +95,7 @@ with the history method. The pages give the conditions, the timing and what fail
 | RECAP-lite | parametric long-term memory: the policy's own successful rollouts written into its weights by fine-tuning; one round completes 94 of 100 against 92 for the parent (ground-truth sub-goals), within noise | a new policy behind any writer and method | [docs/methods/recap](docs/methods/recap/README.md) |
 | Memory policy | long-term memory read by the policy: the stored moment of recorded episodes most similar to the current one (its wrist picture and the next movement as a sentence) in the policy's input at every call; the policy reads it, but it does not improve it (98 of 100 with memory, 96 without) | `--with memory_policy` | [docs/methods/memory_policy](docs/methods/memory_policy/README.md) |
 | Preference notebook | long-term memory of the user: short rules with a scope (the plan, a skill's completion rule, the planner's strictness), written from the user's words and after failures, read by the VLM writer's planner before every episode; "only the red block today" gave the red-only plan in 20 of 20 episodes (0 of 20 without), a correction raised the success from 12 to 19 of 20 | `--with notebook`, with `--writer vlm` | [docs/methods/notebook](docs/methods/notebook/README.md) |
+| Session store | long-term memory of the VLM writer on an embedded vector database (LanceDB): labelled moments of past episodes, retrieved by a choice of keys, with payload filters, provenance and a size cap, growing from the robot's own episodes; the colour key finds the right skill more often than DINOv2 and SigLIP (recall@1 0.47 against 0.19 with the camera moved 5 cm), and a cap of 1,000 moments costs no task success (91 of 100 with use-and-recency eviction, 91 without a cap) | `--with session_store`, with `--writer vlm` | [docs/methods/session_store](docs/methods/session_store/README.md) |
 
 ## Tried and not adopted
 

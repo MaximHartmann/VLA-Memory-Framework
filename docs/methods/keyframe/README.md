@@ -25,8 +25,8 @@ than the frame itself, since at run time the picture is taken at the call that s
 - The recorded demonstrations as two LeRobot datasets of the same frames: the memoryless policy's, with the plain
   instruction as each frame's task (`training/convert_to_lerobot.py --no-videos`), and the history policy's, whose prompts
   mark the events (`training/relabel_history.py`).
-- openpi with our transforms (`training/openpi/`): `RedBlueMemoryInputs` puts `observation/memory_image` into the third
-  image slot (an absent or all-zero picture stays masked out); the config `pi05_red_blue_v2_keyframe`.
+- A policy that takes a third picture, `observation/memory_image`, and ignores it while the picture is absent or all zero
+  (pi0.5 has a third image slot with a mask), trained on that dataset.
 - At run time: an environment that sends the raw wrist frame (`memory/wrist_raw`) and what the writer reads
   (`memory/oracle_prompt` for the simulator's events, `memory/proprio_steps` for the rules writer), as
   `vla_memory.env_keys.ControlKeys` builds them. The later "placed" keyframe also needs the joint state in
@@ -43,17 +43,10 @@ than the frame itself, since at run time the picture is taken at the call that s
 
    It checks that both datasets of a split hold the same frames and writes `<name>_train` and `<name>_val` with the image
    column `memory_image` and a per-frame manifest, `keyframe_frames.csv`.
-2. **Training:** one policy from `pi05_base` with the memoryless policy's recipe (30,000 steps); the config reads
+2. **Training:** one policy from `pi05_base` with the memoryless policy's recipe (30,000 steps) on
    `vla_memory/red_blue_v2_abs_keyframe_train`, the local dataset step 1 writes with `--repo-id
-   vla_memory/red_blue_v2_abs_keyframe` (not distributed; `training/README.md`). In the openpi checkout with our changes:
-
-   ```
-   uv run scripts/compute_norm_stats.py --config-name pi05_red_blue_v2_keyframe
-   XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_red_blue_v2_keyframe --exp-name=<name> --overwrite
-   ```
-
-3. **Run:** serve a checkpoint with its config name and start the proxy with the keyframe method, which keeps the plain
-   instruction as the prompt:
+   vla_memory/red_blue_v2_abs_keyframe` (not distributed; `training/README.md`), the third image slot reading `memory_image`.
+3. **Run:** serve a checkpoint and start the proxy with the keyframe method, which keeps the plain instruction as the prompt:
 
    ```
    python -m vla_memory.proxy --writer oracle --method keyframe --listen-port <port> --upstream-port <policy port> \

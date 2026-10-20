@@ -10,9 +10,10 @@ entries only for a gripper closed on nothing), and sets
     observation/memory_image   the entry's wrist picture (240 x 320 x 3 uint8 in the reference store)
     prompt                     "<prompt>. memory: <words>" (prompt.py)
 
-The policy server must run a policy trained on such inputs (the reference: openpi config pi05_red_blue_v2_memory, whose
-input transform puts observation/memory_image into its third image slot). The modes: normal; off sends no memory at all
-(the bare prompt, no picture key); wrong sends a random entry of ANOTHER skill, picture and sentence (seeded; a control).
+The policy server must run a policy trained on such inputs: observation/memory_image in its third image slot (masked out when
+the picture is absent or all zero) and the prompt with the sentence (the dataset: training/relabel_memory.py). The modes:
+normal; off sends no memory at all (the bare prompt, no picture key); wrong sends a random entry of ANOTHER skill, picture and
+sentence (seeded; a control).
 
 Every call's retrieval is logged under "memory" in the proxy's log record (LOG_KEYS: entry, episode, step, source, skill,
 width, similarity, rule, sentence, ms; rule is one of retrieve.RULES, "wrong", or why nothing was retrieved: no_skill,

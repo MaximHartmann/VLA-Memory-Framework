@@ -48,7 +48,7 @@ inside? Our answer is yes, and a simple linear read-out is enough to get it out 
 - **The last skill writes no line** (as in the policy's training data), so it never reports that the whole task is
   finished.
 
-A deep dive with the reasoning, the related work, every experiment and every number explained:
+A walkthrough of how it works: where the head sits, why it is built this way, how it is trained and the code:
 [detailed/README.md](detailed/README.md).
 
 ## Prerequisites
@@ -112,9 +112,8 @@ steps, the same policy every time; only the writer of the history differs:
 | rules writer | 79 | 172 ms | 51 s |
 | VLM writer | 77 | 1,630 ms | 143 s |
 
-- **No difference is significant:** all four writers are close enough that the differences could be chance (the
-  detailed page explains the test). Of the 22 failed episodes, 20 had no writer error, mostly failed grasps; 2 failed
-  after a missed line.
+- **No clear difference:** all four writers are close enough that the differences could be chance. Of the 22 failed
+  episodes, 20 had no writer error, mostly failed grasps; 2 failed after a missed line.
 - **The head's lines against the simulator's tracker:** 250 of 253 written, 236 of them exactly one call after the tracker,
   7 in the same call, 6 later (up to 11 calls), 1 two calls early while the cube was rising (that episode succeeded),
   3 missed, none false. On the 3,744 calls at which the skill was not done, the head said "done" 19 times (0.5 %); asking for

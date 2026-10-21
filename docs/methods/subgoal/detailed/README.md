@@ -99,10 +99,11 @@ Reference task, the sub-goal policy, 100 fresh seeds of 500 control steps, a pol
 - **The writers are within noise of each other.** The ground truth is not an upper limit on success: the rules and VLM
   writers each completed 94.
 - **The remaining failures are grasps,** not memory: the plan and the switches were right, the policy failed to lift a cube.
-- **The method beats the history method with the same writer** (92 against 82 with the ground truth), because the sub-goal
-  policy grasps more reliably: it lifted the red cube in 95 of 100 episodes, the history policy in 87. A likely reason,
-  not tested: a prompt with only the current skill is shorter and less ambiguous than the full instruction with history
-  lines.
+- **It completed more tasks than the history method with the same writer** (92 against 82 with the ground truth), but the
+  difference is not clear enough to rule out chance: of the seeds only one of the two completed, 17 went to the sub-goal
+  policy and 7 to the history policy. The sub-goal policy grasps more reliably: it lifted the red cube in 95 of 100
+  episodes, the history policy in 87. A likely reason, not tested: a prompt with only the current skill is shorter and less
+  ambiguous than the full instruction with history lines.
 - **The time per episode is the writer's cost.** The policy call itself takes about 0.17 s with every writer; the VLM
   writer adds its questions.
 

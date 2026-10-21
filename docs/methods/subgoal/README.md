@@ -73,6 +73,7 @@ Reference task: pick up and put back a red and then a blue cube with a Franka ar
 
 - The writers are within noise of each other. The failures that remain are mostly failed grasps, not memory.
 - The sub-goal policy grasps more reliably than the history policy (it lifted the red cube in 95 of 100 episodes, against
-  87), which is why it completes more tasks with the same writer (92 against 82 with the ground truth).
+  87) and completed more tasks with the same writer (92 against 82 with the ground truth), although that difference could
+  still be chance.
 - Switching at the right moment matters: before the fix, the policy grasped the red cube again in 14 to 16 of 20 episodes;
   after it, the best checkpoints completed 18 to 20 of 20 tasks, and no checkpoint grasped a placed cube again.

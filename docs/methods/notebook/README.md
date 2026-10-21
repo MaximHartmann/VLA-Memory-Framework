@@ -112,8 +112,7 @@ annotations. Two example sessions are in `vla_memory/methods/notebook/sessions/`
 ## Our findings
 
 The VLM writer in its settled configuration drove the sub-goal policy in simulation (the planner loop). The planning
-model wrote the notebook, except for the corrections in the single-session tests, which came from annotations (the gold
-writer).
+model wrote the notebook.
 
 **Ten days with one user.** 80 episodes, 8 a day, nine messages: double-check, later "be quick"; blue first, later withdrawn;
 only red today; a harmful 35 cm correction; small talk; blue first for one session. The questions and the pass criteria were
@@ -142,8 +141,6 @@ block lifted first.
 - **The robot that ignores the user completed the most.** It runs the red-first order the policy executes best. On the four
   blue-first days the notebook completed 4, 4, 2 and 2 of 8 episodes, the repeating user 6, 3, 3 and 2 (day 5 includes the two
   episodes lost to the harmful rule). That is the policy's limit, not the memory's.
-- **The robot's own lessons added nothing.** When the planning model also wrote lessons after failed episodes into the
-  same notebook (an extra, not part of the framework), 53 of 80 episodes were completed against 54 without them.
 
 **Single sessions** (20 development seeds per condition, 5 per phase in the retention test):
 

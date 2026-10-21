@@ -37,7 +37,7 @@ switch, fixed it ([the picture](detailed/README.md#5-when-to-switch)).
 - **It needs a writer.** Without one (`--writer off`) the policy gets the instruction, which a skill-trained policy cannot
   follow.
 
-A walkthrough with the training data, the code, the timing and all results: [detailed/README.md](detailed/README.md).
+A walkthrough of how it works, with the training data, the code and the timing: [detailed/README.md](detailed/README.md).
 
 ## Prerequisites
 

@@ -282,9 +282,9 @@ before the plan, at the start of a call, before and after the decision, and at t
   policy call. The robot waits at every call. `--call-every` and the gate reduce the number of questions.
 - **Hardware.** It needs a model server with a GPU; our setup uses a 27-billion-parameter model on two RTX 3090.
 - **It depends on the wording.** The model judges from pictures, guided by the task file's description of the cameras.
-  With a misleading description of the wrist camera, the results dropped from 92-94 to 69 tasks of 100.
-- **No going back.** A wrong "yes" moves the plan forward for good, and the skill in between is skipped. It was rare in our
-  runs (below 1 % of the "yes" answers), but it cannot be undone.
+  A misleading description of the wrist camera makes it judge wrongly, and the policy then fails more often.
+- **No going back.** A wrong "yes" moves the plan forward for good, and the skill in between is skipped. It cannot be
+  undone.
 - **The plan is written once.** If the model misreads the instruction, the whole episode follows the wrong plan; only the
   fallback to the task's order protects against a broken answer, not against a wrong one.
 - **Hidden things stay hidden.** It sees only what the two cameras show at that moment, plus the readings; an object hidden

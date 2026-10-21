@@ -38,7 +38,7 @@ inside? Our answer is yes, and a simple linear read-out is enough to get it out 
 **What it cannot do well:**
 
 - **It is slow as built.** The head computes the policy's first 13 blocks a second time for every call, which adds about
-  545 ms per call (about 100 ms in a faster mode whose scores are very slightly off). Reading the layer from the policy's
+  545 ms per call. Reading the layer from the policy's
   own computation would make it almost free; that is not built.
 - **It copies its teacher.** It learned from the rules writer's labels, on one policy, one instruction and one camera setup,
   in simulation.

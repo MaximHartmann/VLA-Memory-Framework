@@ -37,7 +37,7 @@ style and its own slips. Among the 181 runs we kept, 18 hold a retry after a fai
 - **The new policy is for the same skills as its parent,** and was measured with the ground-truth writer and the VLM writer
   only.
 
-A walkthrough with the data scripts and every experiment: [detailed/README.md](detailed/README.md).
+A walkthrough of how it works, with the data scripts: [detailed/README.md](detailed/README.md).
 
 ## Prerequisites
 
@@ -108,4 +108,4 @@ earlier memory-vote gate that also settled the questions about the last skill; t
 - **A test of what RECAP-lite drops.** On the 21 seeds where the parent had stalled in earlier runs (each run twice), it
   completed 36 of 42 episodes alone and 42 of 42 when a scripted expert took over at a detected stall (6 hand-overs, all
   succeeded). Paired by seed and run, the hand-over was better 6 times and worse never, which is unlikely to be chance.
-  That tests the expert, not training on its corrections; the detailed page has the numbers.
+  That tests the expert, not training on its corrections.

@@ -26,7 +26,7 @@ Pick up the red block, place it back, and then grasp the blue block. History: pi
   Schwager, 2026, arXiv 2608.22869).
 
 **What matters most: when a line is written.** The policy believes its history. A line that comes too early, or never,
-sends it the wrong way; a line that comes a little late does no harm. The detailed page has the test.
+sends it the wrong way; a line that comes a little late does no harm. The test is under "Our findings".
 
 **What it cannot do:**
 
@@ -46,7 +46,7 @@ sends it the wrong way; a line that comes a little late does no harm. The detail
   the policy.
 - **It remembers one episode only.** The history starts again with "none yet" at every new episode.
 
-A walkthrough with the code, the training data, the timing study and every number explained:
+A walkthrough of how the method works, step by step, with the code and the training data:
 [detailed/README.md](detailed/README.md).
 
 ## Prerequisites
@@ -96,9 +96,8 @@ steps. A seed fixes where the cubes start; the fresh seeds were not used to choo
 | the memoryless policy: same instruction, no history | 11 | |
 
 - **No writer is clearly better than another.** Seeds that only one of two writers completed split almost evenly. For the
-  ground truth against the rules writer, 14 seeds went only to the ground truth and 11 only to the rules writer. If the two
-  were equally good, a split at least this uneven would happen by chance in 69 of 100 such comparisons (p = 0.69, the sign
-  test explained on the detailed page). Which episode fails is mostly the policy's own grasp, not the memory.
+  ground truth against the rules writer, 14 seeds went only to the ground truth and 11 only to the rules writer: a split
+  that could easily be chance. Which episode fails is mostly the policy's own grasp, not the memory.
 - **The history solves what sinks the memoryless policy.** After the red cube was put back, 84 of 87 episodes went on to
   the blue one, against 17 of 31 without history.
 - **The gap to the sub-goal method is grasping.** With the ground truth the sub-goal policy completed 92 and the history

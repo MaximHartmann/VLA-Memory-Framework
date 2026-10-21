@@ -125,7 +125,7 @@ seeds of 500 control steps, a policy call every 8 steps:
   call takes 0.17 s.
 - The planner's "yes" answers were right in 99.4 % of the cases (98.3 % with the store), and it never declared a failed
   plan complete. The remaining failures are the policy's grasps, not the memory.
-- With the history method, the planner's history matched the simulator's in 94 % of the calls (77 full tasks, against 79
+- With the history method, the planner's history matched the simulator's in 94.6 % of the calls (77 full tasks, against 79
   with the rules writer and 82 with the ground truth), at 1.6 s per policy call instead of 0.17 s with the rules writer.
 - When the order of the skills is known in advance, the rules writer can replace the planner at no cost (94 with the
   sub-goal method, 55 s per episode). The planner is needed to turn a new instruction into a plan.

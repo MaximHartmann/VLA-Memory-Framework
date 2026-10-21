@@ -4,6 +4,11 @@ The short page, [docs/methods/session_store](../README.md), says what the sessio
 explains why it is built this way, follows the code from the command line to the planner's questions and to the write at the end
 of an episode, shows how the store is made, and how to use it with another policy or task.
 
+The session store is not a writer of its own. It is a part of the [VLM writer](../../../writers/vlm/README.md): the writer's
+long-term memory, in place of the example store of `--memory`. The VLM writer still decides when a skill is done; the
+session store decides nothing. It changes where the writer's memory is kept, and lets that memory grow from the robot's own
+episodes.
+
 ![The session store: what happens at every call, and when an episode ends](session_store_overview.svg)
 
 ## 1. The question behind it
@@ -15,8 +20,8 @@ moments (the two pictures of a past policy call and what was true then) that loo
 the answer, and when none of them says "done" the question is skipped (the memory-vote gate); and the nearest ones are
 shown to the model as **examples**, each with its right answer.
 
-Until now this memory was one array file, built once from demonstrations with the simulator's labels and never changed. That
-leaves questions open:
+Before the session store, this memory was the VLM writer's **example store**: one array file (`--memory`), built once from
+recorded demonstrations with their own labels and never changed. That leaves questions open:
 
 - The key that decides what "looks like" means is hand-made: a colour thumbnail plus where the coloured objects are. It needs
   clearly coloured objects. A second task or a real robot would need a learned key that does not depend on colours.
@@ -29,6 +34,19 @@ A vector database, which finds the rows whose vector is nearest to a query vecto
 plain file is not better answers but a learned and general key, payload filters so that one store serves many sessions and
 tasks, persistence with provenance, and costs that can be measured as the store grows. We chose an embedded engine (LanceDB:
 a directory of files, no server).
+
+**What changes against the example store, and what does not.** The planner does not notice the difference. It asks its
+memory for the 6 nearest moments, they vote, and the 4 nearest become the examples, written by the same code as before
+(section 3.3). Two things are new:
+
+- **The write path** (section 3.4). After every episode the robot's own calls are labelled in hindsight by the rules writer,
+  replayed over the robot's gripper signals, and added to the database. The example store was filled once, from
+  demonstrations, and never changed during a run.
+- **The database** (section 4): several keys side by side, filters on the payload (task, instruction, plan, session), a record
+  of where every moment came from and who labelled it, use counters, and a size cap with a rule for what goes.
+
+An example store can be imported as the starting point (`--store-import`, section 4.4); without it the session store starts
+empty.
 
 ## 2. Related work
 

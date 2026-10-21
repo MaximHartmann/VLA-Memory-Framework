@@ -1,5 +1,9 @@
 # The session store: the long-term memory on a vector database
 
+**The session store is not a writer of its own.** It is a part of the [VLM writer](../../writers/vlm/README.md): the
+writer's long-term memory of past moments, in place of the example store of `--memory`. The VLM writer still decides when a
+skill is done. The session store changes where that memory is kept, and lets it grow from the robot's own episodes.
+
 ## The idea
 
 The VLM writer decides at every policy call whether the current skill is done, and it asks a large model to find out. That is
@@ -9,13 +13,29 @@ questions by itself.
 The writer's long-term memory is a store of **moments** of past episodes. A moment is the two camera pictures of one policy call
 and what was true then: which skill was active, where each object was, whether the gripper was closed. At a call, the stored
 moments that look most like the current pictures are retrieved. They **vote** on the question: if none of them says "done", the
-model is not asked at all. The nearest of them are also shown to the model as examples, each with its right answer.
+model is not asked at all. The nearest of them are also shown to the model as examples, each with its right answer. "Looks most
+like" is measured with a hand-made **key**: a coarse colour thumbnail of each picture plus the area and position of each object
+colour.
 
-By default this store is one array file (`--memory`), built by hand from demonstrations and never changed. "Looks most like" is
-measured with a hand-made **key**: a coarse colour thumbnail of each picture plus the area and position of each object colour.
+**Before the session store**, this memory was the **example store**: one array file (`--memory`), built once from recorded
+demonstrations and never changed. The session store takes its place. The planner reads it in exactly the same way: the 6
+nearest moments vote, the 4 nearest become the examples, and the same code writes them. What changes is where the moments
+come from and how they are kept:
 
-The session store keeps the same moments in an embedded vector database (LanceDB: a directory of files, no server), and fills
-it with the robot's own episodes. One row is one moment:
+| | the example store (`--memory`) | the session store (`--with session_store`) |
+|---|---|---|
+| read by the planner for | the vote and the examples | the same, in the same way |
+| kept in | one array file | a database directory (LanceDB: a directory of files, no server) |
+| the moments come from | recorded demonstrations, put in once by a script | the robot's own episodes, added after every episode; it can start from imported demonstrations |
+| labelled by | the demonstrations' own phases | the rules writer, replayed afterwards over the robot's gripper signals |
+| during a run | never changes | grows after every episode |
+| "looks most like" is measured by | the colour key | the colour key, or a learned image key |
+| a lookup can be limited to | nothing: every moment counts | the same task, instruction, plan or session |
+| each moment also records | nothing more | where it came from, who labelled it, how often it was retrieved |
+| size | fixed | unbounded, or capped with a rule for what goes |
+
+So the session store is the same memory in a database, plus a **write path** that fills it from the robot's own experience.
+One row of the database is one moment:
 
 ```
 keys         the colour key (always), and optionally a DINOv2 ViT-S/14 embedding of the exterior picture
@@ -28,7 +48,7 @@ use counters how often the moment was retrieved, and when last
 
 ![The session store: what happens at every call, and when an episode ends](detailed/session_store_overview.svg)
 
-**What the database adds** over the array file:
+**Why these changes:**
 
 - **Keys.** Several keys can live side by side, and the run chooses which one retrieves (the colour key by default). A learned
   image embedding does not depend on object colours, which a second task or a real robot would need, and it should be less

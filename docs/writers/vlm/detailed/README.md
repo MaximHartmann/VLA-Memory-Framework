@@ -234,8 +234,11 @@ gripper high above table = true; for the skill "place the red block": current_sk
 followed by its two pictures. The right answer for the current skill comes from the entry's label: "done" if the skill that
 was active in the stored moment comes later than the current skill. The same rule decides the votes of the gate.
 
-**Read only.** During an episode the store is never changed. A store kept as a directory (`exemplar_dir.py`) can grow
-between episodes; the session store extension does that.
+**Read only.** During an episode the store is never changed. `--memory` also reads a store saved as a directory
+(`ExemplarStore.save_dir`, `exemplar_dir.py`), a format that your own code can extend between episodes without rewriting the
+whole file. The store that grows by itself is the [session store](../../../methods/session_store/README.md): with
+`--with session_store` it takes the place of `--memory`, fills itself from the robot's own episodes, and the planner reads it
+in exactly the same way (section 9).
 
 ## 7. Recovery (`--recovery`)
 
@@ -275,6 +278,11 @@ Other memories can join the planner as extensions (`--with NAME`), for example t
 store. An extension can add a line to the plan request and to every question, show its own examples, add fields to the
 records, change a setting for an episode, and refuse a switch (`allow_switch`). The planner calls them at fixed points:
 before the plan, at the start of a call, before and after the decision, and at the end of a call.
+
+The session store goes one step further: it does not add to the example store, it replaces it. `build_memory` takes an
+extension's store before the file of `--memory`, and the planner reads either through the same interface (`MemoryStore` in
+`vla_memory/memory.py`: `retrieve`, `describe_hit`, `fewshot_content`). So the vote and the examples of section 4 work
+unchanged; what differs is where the moments come from.
 
 ## 10. Limitations
 

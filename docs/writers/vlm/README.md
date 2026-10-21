@@ -35,7 +35,9 @@ similar moments from earlier episodes together with the right answer for each (s
   every episode.
 - **Long-term memory**, optional: the example store. It holds moments from recorded episodes, each labelled with the skill
   that was active and the state of every object, plus a compact colour summary of its pictures that is used to find similar
-  moments. During an episode the store is only read, never changed.
+  moments. During an episode the store is only read, never changed. The [session store](../../methods/session_store/README.md)
+  can take its place (`--with session_store`): the same kind of moments, read in the same way, but kept in a database that
+  grows from the robot's own episodes.
 - **The task file**: the skills, the completion rule of each skill, the description of the cameras, and the format of the
   answers.
 
@@ -99,8 +101,9 @@ model. `scripts/run_proxy.sh` wraps the command.
 - **The proxy's log** holds, for every call: `queried` (the model was asked), `advanced` (a skill was completed),
   `vlm_ms` (how long the model took), `skill_index`, `vlm` (the model's answer) and `recovery`.
 - **The planner's own log** (`<log>.planner.jsonl`) holds the plan and every question with everything the model was shown.
-- Other memories for the planner plug in as extensions (`--with NAME`), for example the preference notebook and the
-  session store.
+- Other memories for the planner plug in as extensions (`--with NAME`): the
+  [preference notebook](../../methods/notebook/README.md), the user's wishes as text rules, and the
+  [session store](../../methods/session_store/README.md), which replaces the example store with one that grows.
 
 ## Our findings
 

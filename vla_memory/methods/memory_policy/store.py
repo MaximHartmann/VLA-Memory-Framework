@@ -13,7 +13,7 @@ A store is a directory with these files:
 The fields of an entry, in file order:
 
     id            the entry's index, 0 to n - 1
-    episode       the episode it comes from, e.g. "demo_train_000056" or "nudge_2662"; retrieval can leave one episode out
+    episode       the episode it comes from, e.g. "demo_train_000056" or "rollout_2662"; retrieval can leave one episode out
     seed          the simulator seed of that episode (-1 for a demonstration)
     step          the control step of the moment in its episode
     skill         the skill the robot worked on (one of the task's skill prompts)

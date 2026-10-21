@@ -128,7 +128,7 @@ that returns `{"actions": ...}` (`vla_memory/transport.py`).
 
 | idea | result | page |
 |---|---|---|
-| Frame window: the last 8-16 policy calls as compressed frame summaries, pooled into the action expert's conditioning | 6-12 of 100 in two versions (the [built-in memory](docs/methods/builtin_memory/README.md) on the same data: 34-39); the information was in the window, selected in the second version, and not used by the controller | [docs/methods/frame_window](docs/methods/frame_window/README.md) |
+| Frame window: the last 8-16 policy calls as compressed frame summaries, pooled into the action expert's conditioning | 6-12 of 100 in two versions (the [built-in memory](docs/methods/builtin_memory/README.md) on the same data: 34-39); the information was in the window, but the attention barely picked it out (in the second version the decisive frames got only 1.6 times their equal share) and the action expert did not use it | [docs/methods/frame_window](docs/methods/frame_window/README.md) |
 
 Each further writer or method gets its own page under `docs/writers/` or `docs/methods/` and a row in these tables; an idea
 that was evaluated and did not work gets a page and a row here.

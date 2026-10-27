@@ -69,8 +69,8 @@ How it works inside, why it is built this way, and the code: [detailed/README.md
    python training/fit_event_head.py --recordings 'runs/*.npz' --out head/
    ```
 
-   It prints how well the head tells "done" from "not done" (the AUROC: 1.0 is perfect, 0.5 is guessing) and saves the
-   head in `head/`.
+   It prints how well the head tells "done" from "not done", the AUROC: how often a moment where the skill was done scores
+   higher than one where it was not (1.0: always, a perfect head; 0.5: guessing). It saves the head in `head/`.
 
 4. **Run with the head as the writer**, with the method of the recording:
 

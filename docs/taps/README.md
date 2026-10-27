@@ -11,7 +11,7 @@ computation from input to actions), with nothing computed twice, and the actions
 
 The policy server hands the numbers out with every reply, as `reply["policy_state"]` (`vla_memory/taps/reply.py`): a few
 named summaries, `{"names": [...], "values": (n, width) float16}`. A name says which block and which tokens:
-`"block12:prompt"` is block 12, averaged over the prompt's words. The head runs in the proxy and takes the summary it was
+`"block12:prompt"` is block 12 (counted from 0, as in the code), averaged over the prompt's words. The head runs in the proxy and takes the summary it was
 fitted on, by its name.
 
 The framework has one interface for both kinds of models (`vla_memory/taps/`):

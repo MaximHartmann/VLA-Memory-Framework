@@ -119,12 +119,21 @@ matches the policy's training labels.
 
 ### Block 12 and the text tokens, the threshold, two verdicts in a row
 
-**Which block, and which average.** The head can read the policy after any of its 18 blocks, and it can sum up the block's
-output in different ways: the vector of the prompt's **last token**, the average over the **picture tokens**, or the average
-over the prompt's **text tokens**. Seven choices were compared on 29 runs of the history policy, with 5-fold
-cross-validation: each run is scored by a head trained on the other runs. The runs held 402 "done" rows and 2,223 "not done"
-rows. The **AUROC** is the chance that a random "done" row scores higher than a random "not done" row (0.5 is guessing, 1 is
-perfect). "Caught" counts the "done" rows above the threshold that only 1 % of the "not done" rows reach. The last four
+**Which block, and which average.** The head can read the policy after any of its 18 blocks. The blocks are numbered from
+0, as in the code: block 0 is the first, block 17 the last. It can also sum up the block's output in different ways: the
+vector of the prompt's **last token**, the average over the **picture tokens**, or the average over the prompt's **text
+tokens**. Seven choices were compared on 29 runs of the history policy, with 5-fold cross-validation: each run is scored by
+a head trained on the other runs. The runs held 402 "done" rows and 2,223 "not done" rows.
+
+**The AUROC** measures how well a head tells the two apart. Take one "done" row and one "not done" row at random: a good
+head gives the "done" row the higher score. The AUROC is how often that happens, over all such pairs. At 1.0 every "done"
+row scores above every "not done" row, so one threshold separates them without a mistake; at 0.5 the head is guessing,
+like a coin. The 0.991 in the last row of the table means: in 99.1 % of the pairs the "done" row scored higher. Unlike the
+share of right answers, the AUROC needs no threshold, and the many "not done" rows cannot fool it: a head that always says
+"not done" would be right 85 % of the time, but its AUROC is 0.5. (The name stands for "area under the ROC curve", a
+plot from statistics that gives the same number.)
+
+In the table, "caught" counts the "done" rows above the threshold that only 1 % of the "not done" rows reach. The last four
 columns play each head through the 29 runs as a writer, against the rules writer's 67 lines.
 
 | block | summary | AUROC | "done" rows caught | lines one call late | two or more calls late | missed | false |

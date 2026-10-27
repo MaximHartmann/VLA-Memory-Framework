@@ -148,17 +148,16 @@ only which skills, and in which order, differ. We counted, per episode (fixed in
 - **Checked as asked:** the planner checks progress the way the user asked. After "double-check" it moves on only after two
   "done" answers in a row; after "be quick" it asks the planning model only at every second policy call. Counted from the
   fifth episode on, 76 episodes. An instruction cannot change how the planner checks, so only the notebook can score here.
-- **Task done:** every block in the plan was picked up and put back.
-- **Done the user's way:** the task done, planned as asked, and the plan's first block was also the first one lifted.
+- **Done the user's way:** the task done as the user asked: planned as asked, the plan's first block lifted first, and
+  every block in the plan picked up and put back.
 
 | measure | the notebook | no memory | the repeating user |
 |---|---|---|---|
 | planned as asked | 72 of 72 | 33 of 72 | 72 of 72 |
 | checked as asked | 76 of 76 | 0 of 76 | 0 of 76 |
-| task done | 54 of 80 | 73 of 80 | 58 of 80 |
-| task done, plan starting with blue | 14 of 34 | 2 of 2 | 15 of 34 |
-| task done, plan starting with red | 40 of 46 | 71 of 78 | 43 of 46 |
 | done the user's way | 54 of 80 | 40 of 80 | 58 of 80 |
+| done the user's way, when blue first was wanted | 14 of 34 | 2 of 34 | 15 of 34 |
+| done the user's way, in the other episodes | 40 of 46 | 38 of 46 | 43 of 46 |
 | minutes per episode (median) | 3.8 | 4.4 | 4.6 |
 | model calls per episode (the plan and the questions) | 26 | 30 | 34 |
 | what the user typed in ten days | 9 messages, 91 words | 9 messages, 91 words | 280 messages, 3,376 words |
@@ -166,19 +165,21 @@ only which skills, and in which order, differ. We counted, per episode (fixed in
 - **The notebook follows the user as the repeating user does, with 91 words instead of 3,376.** Both planned as asked in
   all 72 episodes. Without memory the robot did so in 33: in the episode right after a message, and whenever the user
   wanted what it does anyway (red first, as on days 7 to 9).
-- **Blue first is hard for the policy, whoever remembers the wish.** With a plan starting with blue the policy finished 14
-  and 15 of 34 episodes (the notebook's 14 include the two lost to the harmful rule, below), with a plan starting with red
-  40 and 43 of 46, likely because its demonstrations always took red first. The robot without memory planned blue first
-  only twice, right after a message. So it finished the most tasks, 73, but only 40 the way the user asked.
-- **The notebook is also the fastest.** Its episodes were the shortest and needed the fewest model calls, because from day 6 on "be
-  quick" halves the questions. It also gives the planning model the least extra text to read. Once per episode the planner
-  asks the model for the plan; the notebook adds its rules to that request, 17 words while a rule about the blocks holds
-  ("User profile (apply unless the instruction says otherwise): - Prioritize the blue block over the red block") and none
-  otherwise, 8.8 words per episode on average. The repeating user's sentences added 42.
-- **Time.** Reading the notebook takes about half a millisecond at an episode start. The writer works between episodes: 1
-  to 19 seconds per message (median 6 s; 12 model calls for the 9 messages). The three robots ran at the same time and
-  shared one planning model, which then needed 3 to 5 seconds per question instead of 2.5. So all episode times here are
-  longer than with a model of their own.
+- **Blue first: without memory the wish lasts one episode, and the policy finds it hard.** The user wanted blue first in
+  34 episodes. The robot without memory planned it only in the episode right after the message and then went back to red
+  first, so it did blue first the user's way twice. The notebook and the repeating user planned blue first all 34 times,
+  but the policy finished only 14 and 15 of them (the notebook's 14 include the two lost to the harmful rule, below),
+  likely because its demonstrations always took red first. In the other 46 episodes all three did 38 to 43 the user's way.
+- **The notebook is also the fastest.** Its episodes were the shortest and needed the fewest model calls, because from day
+  6 on "be quick" halves the questions. It also gives the planning model the least extra text to read. Once per episode
+  the planner asks the model for the plan; the notebook adds its rules to that request, 17 words while a rule about the
+  blocks holds ("User profile (apply unless the instruction says otherwise): - Prioritize the blue block over the red
+  block") and none otherwise, 8.8 words per episode on average. The repeating user's sentences added 42.
+- **Time.** The writer runs only when the user sends a message, before the next episode, not at every episode: 1 to 19
+  seconds per message (median 6 s). The 9 messages took 12 model calls, because a message that touches an existing rule
+  needs a second call to merge the two. The three robots ran at the same time and shared one planning model, which then
+  needed 3 to 5 seconds per question instead of 2.5, so all episode times here are longer than with a model of their own.
+  A second experiment, with only one robot running at a time, will measure the times without the sharing.
 - **Rules ended on time, and no rule acted where it must not.** The rule for the day ended at midnight, the rule for the
   session with the session, and the withdrawal held for three days. In the two episodes whose instruction named both blocks,
   the instruction's own order won. There was no false application in the 80 episodes.

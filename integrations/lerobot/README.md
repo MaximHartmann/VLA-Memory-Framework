@@ -59,37 +59,3 @@ LeRobot's own functions, for any policy type (`load_policy`). Then, at every cal
 At start-up the server makes one call with black pictures and a short prompt. In this call the tap picks the backbone and
 its block, and the metadata then names the summary and the backbone. `LeRobotPolicy` (the policy part: `infer(observation)`
 and `metadata`) is separate from `serve()` (the network part), so it can be tested without a network.
-
-## What was checked
-
-With SmolVLA (`lerobot/smolvla_base`) on one RTX 3090, on our recorded pictures (the tap's own checks are on the
-[state taps page](../../docs/taps/README.md)):
-
-- **Every weight loads** with `load_vlm_weights` off: no missing and no unexpected keys.
-- **The tap finds the language backbone:** SmolVLA's text model (as wide as the word table, 960; 177 tokens), not the
-  vision encoder (1,024 tokens per picture, width 768) or the action expert (50 tokens, width 720). SmolVLA's own loop calls
-  the parts of each block one by one, so the tap reads block 11 of 16 at the next block's norm.
-- **It finds the prompt's words:** the summary averages the 9 real words of our task, in every call, and neither the
-  pictures nor the state token.
-- **The summary is the policy's own numbers:** the tap's state after a block is exactly that of SmolVLA's own loop cut
-  after that block (blocks 8, 11 and 13 checked), and a median 0.2 % away from the text model run by `transformers` on the
-  same input.
-- **The actions do not change:** identical with and without the tap in 30 of 30 calls; a call took 296 ms without the tap
-  and 297 ms with it.
-- **Over the network**, directly with openpi's client and through the proxy (`--writer off --method subgoal`), every reply
-  had 50 actions of size 6 and the summary `block11:prompt`.
-- **On the CPU, with a small fake LeRobot policy:** the renaming of the observation, the post-processed action chunk, the
-  state's names, the reset at a new episode, and a policy without a stack of blocks.
-
-**Not covered yet:**
-
-- Only SmolVLA was run. Another policy type is expected to work through LeRobot's own functions, but is untested.
-- A policy without a stack of transformer blocks (a diffusion policy's U-Net) has no state to hand out: the server then
-  sends its actions only.
-- The server calls `predict_action_chunk` and hands out the whole chunk; LeRobot's real-time chunking is not used.
-- A state of the wrong size is cut or padded without a warning, so a wrong `--state` shows only in the actions.
-- Calls run one after another, at batch 1.
-- A policy whose backbone input shows no words (it adds position vectors to them first) gets the last real token
-  instead, named so (`block11:last`).
-- A policy that keeps past observations (`n_obs_steps` above 1) would count the extra questions of the proxy's recorder
-  (`--record-head`) as calls.

@@ -110,24 +110,41 @@ annotations. Two example sessions are in `vla_memory/methods/notebook/sessions/`
 The VLM writer in its settled configuration drove the sub-goal policy in simulation (the planner loop). The planning
 model wrote the notebook.
 
-**Ten days with one user.** 80 episodes, 8 a day, nine messages: double-check, later "be quick"; blue first, later withdrawn;
-only red today; a harmful 35 cm correction; small talk; blue first for one session. The questions and the pass criteria were
-fixed in writing before the first episode. Per episode, *plan followed* means that the plan is the one the user's rules ask
-for. *Settings in force* means that the planner's settings are the ones the user asked for. *Task success* means that every
-block the plan picks up was placed. *Done the user's way* means success with the plan the user wants and the plan's first
-block lifted first.
+**Ten days with one user.** A scripted user, 80 episodes over ten days (8 a day), and nine messages: day 1 "double-check
+before you move on" (after the fourth episode), day 2 "from now on, blue first", day 3 "only red today", day 5 a correction
+that cannot be met (35 cm), day 6 "be quick" instead of double-checking, day 7 "forget blue first", day 8 two lines of
+small talk, day 10 "this time, blue first" (for one session). Three robots ran the same 80 episodes: with **the notebook**;
+with **no memory**, where a message goes in front of the next episode's instruction only; and with **the repeating user**,
+who types every wish so far in front of every instruction. We counted, per episode (fixed in writing before the first
+episode):
 
-| condition | plan followed (72 episodes from the first plan preference on) | settings in force (76 episodes) | task success of 80 | done the user's way, of 80 | what the user typed |
-|---|---|---|---|---|---|
-| the notebook | 72 | 76 | 54 | 54 | 9 messages, 91 words |
-| no memory (each message in front of the next episode only) | 33 | 0 | 73 | 40 | 9 messages, 91 words |
-| the user repeats every message before every episode | 72 | 0 | 58 | 58 | 280 messages, 3,376 words |
+- **Planned as asked:** the plan has the blocks and the order the user asked for: blue first on day 2, only red on day 3,
+  red first again after "forget blue first". Counted from day 2 on, 72 episodes: before that the user had said nothing
+  about the blocks, and every robot plans red first.
+- **Checked as asked:** the planner checks progress the way the user asked. After "double-check" it moves on only after two
+  "done" answers in a row; after "be quick" it asks the planning model only at every second policy call. Counted from the
+  fifth episode on, 76 episodes. An instruction cannot change how the planner checks, so only the notebook can score here.
+- **Task done:** every block in the plan was picked up and put back.
+- **Done the user's way:** the task done, planned as asked, and the plan's first block was also the first one lifted.
 
-- **The notebook follows the user as the repeating user does, with 91 words instead of 3,376.** Both followed the plan
-  in all 72 episodes. Without memory the robot followed in 33, a gap far too large to be chance. The notebook adds 8.8
-  words to the plan request instead of 42, and uses 26 model calls per episode instead of 34 (its "be quick" setting
-  halves the questions from day 6 on). Settings such as "be quick" cannot be given in an instruction at all, so the
-  other two score 0 on them by construction.
+| | the notebook | no memory | the repeating user |
+|---|---|---|---|
+| planned as asked (of 72) | 72 | 33 | 72 |
+| checked as asked (of 76) | 76 | 0 | 0 |
+| task done (of 80) | 54 | 73 | 58 |
+| done the user's way (of 80) | 54 | 40 | 58 |
+| minutes per episode (median) | 3.8 | 4.4 | 4.6 |
+| model calls per episode (the plan and the questions) | 26 | 30 | 34 |
+| what the user typed in ten days | 9 messages, 91 words | 9 messages, 91 words | 280 messages, 3,376 words |
+
+- **The notebook follows the user as the repeating user does, with 91 words instead of 3,376.** Both planned as asked in
+  all 72 episodes. Without memory the robot did so in 33: in the episode right after a message, and whenever the user
+  wanted what it does anyway (red first, as on days 7 to 9).
+- **It is also the fastest.** Its episodes were the shortest and needed the fewest model calls, because from day 6 on "be
+  quick" halves the questions. Its plan request also grows by only 8.8 words, against the repeating user's 42. The writer
+  works between episodes: 1 to 19 seconds per message (median 6 s, 12 model calls for the 9 messages). The three robots ran
+  at the same time on one shared planning model, which then needed 3 to 5 seconds per question instead of 2.5, so every
+  episode here is slower than with a model of its own.
 - **Rules ended on time, and no rule acted where it must not.** The rule for the day ended at midnight, the rule for the
   session with the session, and the withdrawal held for three days. In the two episodes whose instruction named both blocks,
   the instruction's own order won. There was no false application in the 80 episodes.
@@ -142,10 +159,10 @@ block lifted first.
 
 | test | with the notebook | without memory | restated in every instruction |
 |---|---|---|---|
-| "Please only do the red block today." | plan followed 20 of 20, success 20 of 20 | plan 0 of 20, success 18 of 20 | plan 20 of 20, success 20 of 20 |
-| "Please double-check ...", then "... please be quick." | settings in force 20 of 20 and 20 of 20; success 18 and 17 of 20 | success 17 of 20 | |
-| the planner's rule for "picked up" asked only for a hand height of 19 cm, too early; a correction asked for 22 cm | success 19 of 20; the planner moved on when the hand was at a median 0.277 m | success 12 of 20; 0.235 m | |
-| an order rule, four unrelated messages, then a new order | plans followed 5 of 5 in all four phases, settings 5 of 5 once stated | | plans 5 of 5, settings 0 of 5 |
+| "Please only do the red block today." | planned as asked 20 of 20, task done 20 of 20 | planned as asked 0 of 20, task done 18 of 20 | planned as asked 20 of 20, task done 20 of 20 |
+| "Please double-check ...", then "... please be quick." | checked as asked 20 of 20 and 20 of 20; task done 18 and 17 of 20 | task done 17 of 20 | |
+| the planner's rule for "picked up" asked only for a hand height of 19 cm, too early; a correction asked for 22 cm | task done 19 of 20; the planner moved on when the hand was at a median 0.277 m | task done 12 of 20; 0.235 m | |
+| an order rule, four unrelated messages, then a new order | planned as asked 5 of 5 in all four phases, checked as asked 5 of 5 once stated | | planned as asked 5 of 5, checked as asked 0 of 5 |
 
 - **The notebook is followed.** The plan rules, the presets and the corrections reached the planner in every episode. "Be
   quick" cut the model calls per episode from 28.5 to 16.5 and the episode from 2.1 to 1.8 minutes at the same success. The

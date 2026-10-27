@@ -296,7 +296,7 @@ are class attributes, so a subclass can change them without copying the methods.
 
 **Your own session.** Write a session file (`sessions/validity_and_precedence.yaml` shows the format), implement an
 `EpisodeRunner` that plays a block of episodes through the proxy with `--profile` for the notebook condition, and call
-`run_session`. It scores the plan following, the settings and the writer.
+`run_session`. It scores whether each episode was planned and checked as the user asked, and the writer.
 
 **On a real robot.** The notebook is read from a file at every episode start. Any application that writes the file, or calls
 the writer, between episodes works.

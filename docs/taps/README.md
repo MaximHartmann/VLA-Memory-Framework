@@ -195,26 +195,3 @@ must say "done" (192 calls). Every variant got the same observations and the sam
   actions moved by rounding (at most 0.0045).
 - **The next-norm way works:** openpi's training forward is a loop that calls the blocks' parts itself. There the tap read
   the next blocks' norms and got the same blocks as in the policy's call, a median 0.2 to 1 % apart.
-
-**The automatic tap on LeRobot's SmolVLA** (`lerobot/smolvla_base`, our recorded pictures as two of its cameras; the
-server's own checks are on the [LeRobot page](../../integrations/lerobot/README.md)):
-
-- **The width decides here.** SmolVLA's vision encoder sees the most tokens (1,024 per picture, width 768), the text model
-  177 (width 960, that of the word table), the action expert 50 (width 720). The tap picked the text model; the most tokens
-  alone would have picked the vision encoder.
-- **SmolVLA's loop calls the parts of each block one by one,** so the tap reads block 11 of 16 at the next block's norm,
-  with the mask the policy gives its backbone: 138 real tokens of 177 (two pictures of 64 tokens, 9 of the prompt's 48, and
-  the state token).
-- **It finds the prompt's words:** the 9 real words of our task, in every call, and neither a picture token nor the state
-  token.
-- **The summaries are SmolVLA's own numbers:** the tap's state after a block is exactly that of SmolVLA's own loop cut after
-  the block (blocks 8, 11 and 13 checked).
-- **The actions do not change:** identical with and without the tap in every call; 296 ms per call without the tap, 297 ms
-  with it.
-
-**Small models:** with tiny PyTorch and flax models and randomly initialised `transformers` models (Gemma, Llama), the taps
-read exactly the layer's output, and the model's outputs stay the same (exactly, or within 1e-6 for
-`nn.TransformerEncoderLayer`, which leaves its fast path while a hook is registered). There the automatic tap also passed
-the special cases above: scaled and unscaled word vectors, padding marked by every kind of mask, no words (the last real
-token), another stack with more tokens, a custom loop (the next norm), several passes in one call, and a `torch.compile`d
-model.

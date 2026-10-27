@@ -97,7 +97,7 @@ episode (`memory/new_episode`, `memory/episode`), which a policy with its own me
 - `--help` together with a choice lists that choice's options, for example
   `python -m vla_memory.proxy --writer vlm --method subgoal --help`.
 - `--log FILE` writes one JSON line per policy call: what the writer decided and what the policy received.
-- Ctrl-C or SIGTERM stops the proxy cleanly: it closes the open connections, lets the extensions save the last episode,
+- Ctrl-C stops the proxy cleanly: it closes the open connections, lets the extensions save the last episode,
   and closes its log.
 
 The measured results of the writer and method combinations on the reference task are on
@@ -142,52 +142,6 @@ them, and, for a third picture, `observation/memory_image`. It expects a dict wi
 this protocol, such as openpi's `serve_policy.py`, needs nothing else. For another protocol, `--transport` names a class
 with an `infer(observation)` method that returns `{"actions": ...}` (`vla_memory/transport.py`).
 
-## Current restrictions (work in progress)
-
-The framework is young, and today a setup has to follow these rules. The list is meant to get shorter.
-
-**The policy**
-
-- It is served over openpi's websocket protocol, or a `--transport` class connects the proxy to its own server.
-- It answers one observation at a time with a chunk of actions; the environment carries out the chunk before the next
-  call.
-- It is trained for the method's inputs, with exactly the task file's strings
-  ([What the policy must accept](#what-the-policy-must-accept)).
-
-**The environment** (the simulator or the robot program)
-
-- It connects to the proxy instead of the policy server; each proxy serves one environment.
-- It sends the full instruction as `prompt` and, with every call, the `memory/` entries (`vla_memory/env_keys.py`,
-  `ControlKeys`): always the episode markers, plus what the chosen writer reads (for the oracle the simulator's current
-  skill, for the rules writer the gripper readings of every control step, for the VLM writer the raw camera pictures).
-- The policy's own observation keys pass through unchanged; a method that adds a picture sends it as
-  `observation/memory_image`.
-
-**The task**
-
-- One task file: a fixed set of objects and verbs, and every skill reads like the task's template ("pick up the red
-  block").
-- The robot does one skill at a time, following a plan: the task file's order, or one the VLM writer makes from the
-  instruction.
-- Completion rules exist for picking and placing with one two-finger gripper (one held object at a time) and for skills
-  described by signal thresholds; other kinds of skills need the VLM writer or new rules.
-- With the history and keyframe methods the last skill writes no line, and the history never holds more lines than the
-  policy's training data.
-
-**The writers**
-
-- `oracle`: works in simulation only, because it needs the simulator's tracker.
-- `rules`: needs thresholds measured on the policy's training demonstrations.
-- `vlm`: needs a vision-language model behind an OpenAI-compatible server.
-- `head`: needs a policy server that hands out the policy's state (openpi's π0.5, LeRobot's policies, or a PyTorch policy
-  with the automatic tap) and a head fitted for that policy and method; a JAX policy outside openpi needs a change to its
-  code.
-
-**What has been tested**
-
-- Live, only the reference task (a Franka arm and two cubes in Isaac Sim) with π0.5 policies; other tasks only in the
-  framework's tests, and no real robot yet.
-- The built-in memory and its training launcher work with openpi's π0.5 and the reference task only.
 
 ## Other methods
 
@@ -208,10 +162,3 @@ training recipes or live inside the policy.
 | idea | result | page |
 |---|---|---|
 | Frame window: the last 8-16 policy calls as compressed frame summaries, pooled into the action expert's conditioning | 6-12 of 100 in two versions (the [built-in memory](docs/methods/builtin_memory/README.md) on the same data: 34-39); the information was in the window, but the attention barely picked it out (in the second version the decisive frames got only 1.6 times their equal share) and the action expert did not use it | [docs/methods/frame_window](docs/methods/frame_window/README.md) |
-
-## Adding your own
-
-Each further writer or method gets its own page under `docs/writers/` or `docs/methods/` and a row in these tables; an
-idea that was evaluated and did not work gets a page and a row under "Tried and not adopted". A writer, method, extension
-or transport of your own needs no change to the framework: `--writer`, `--method`, `--with` and `--transport` also take an
-import path `module:Class`, or the name of an entry point that an installed package declares.

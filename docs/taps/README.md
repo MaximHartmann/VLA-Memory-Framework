@@ -11,8 +11,8 @@ computation from input to actions), with nothing computed twice, and the actions
 
 The policy server hands the numbers out with every reply, as `reply["policy_state"]` (`vla_memory/taps/reply.py`): a few
 named summaries, `{"names": [...], "values": (n, width) float16}`. A name says which block and which tokens:
-`"block12:prompt"` is block 12 (counted from 0, as in the code), averaged over the prompt's words. The head runs in the proxy and takes the summary it was
-fitted on, by its name.
+`"block12:prompt"` is block 12 (counted from 0, as in the code), averaged over the prompt's words. The head runs in the
+proxy and takes the summary it was fitted on, by its name.
 
 The framework has one interface for both kinds of models (`vla_memory/taps/`):
 
@@ -30,34 +30,50 @@ leaves out the padding that fills the prompt to its fixed length. With `trainabl
 so that a head on it could be trained together with the policy; the head writer does not need that, its head is fitted
 afterwards on the unchanged policy.
 
-**The automatic tap** (`AutoTap`, PyTorch, `vla_memory/taps/auto.py`). `TorchStateTap` has to be told which layer to read
-and which tokens to average, so someone has to know the model's insides. `AutoTap` finds both by itself in the policy's
-first call, and reads every policy by one rule, the one the openpi server follows for π0.5: **the language backbone two
-thirds of the way up, averaged over the prompt's words** (`"block12:prompt"` for π0.5, `"block11:prompt"` for SmolVLA). So
-the head writer works the same way with every server.
+**The automatic tap** (`AutoTap`, PyTorch, `vla_memory/taps/auto.py`). To read a policy, a tap has to know three things
+about its insides: which stack of blocks is the language backbone, which block to read, and where among the tokens the
+prompt's words are. `TorchStateTap` and `JaxStateTap` have to be told, so someone has to look inside the model first.
+`AutoTap` finds all three by itself in the policy's first call, and reads every policy by one rule, the one the openpi
+server follows for π0.5: **the language backbone two thirds of the way up, averaged over the prompt's words.** The block's
+number follows from the size of the backbone. π0.5's has 18 blocks, and two thirds of 18 is 12: the tap reads block 12
+(`"block12:prompt"`). A backbone of 16 blocks would give block 11 (two thirds of 16 is 10.7, rounded). So the head
+writer works the same way with every server.
 
-- **The language backbone.** A transformer keeps its blocks in a list of at least 4 modules of one class, and a VLA has
-  several such stacks: a vision encoder, the language backbone, often an action expert. The language backbone is as wide
-  as the model's **word table** (its largest table of token vectors, an `nn.Embedding`), and it reads the pictures and the
-  words together, so it sees many tokens. The tap keeps the stack of that width that saw the most tokens (if no stack has
-  that width, the stack with the most tokens).
-- **The block and the words.** It reads the block two thirds of the way up the stack. It finds the words through the word
-  table: the vectors the table gives out in a call show up again in the backbone's input, at the prompt's places (compared
-  by their direction, since Gemma scales them). The attention mask the block gets marks the padding, and the tap averages
-  the block's output over the remaining words.
-- **Two ways to read a block.** Normally with a forward hook on the block. Some models call a block's parts one by one in
-  a loop of their own, so that this hook never fires. Then the tap reads the input of the next block's first norm (the
-  normalisation layer a block starts with), which holds the same numbers; `tap.how` says which way it uses. The norm gets no
-  attention mask, so the tap takes the mask the model last gave to a module on the way to the stack. A policy that runs its
-  backbone several times in one call (an autoregressive policy, once per new token) is read in the pass with the most
-  tokens.
+In the first call the tap listens to the whole model and decides three things:
 
-If the backbone's input shows no word in a call (a model that adds position vectors to the words first), the tap hands out
-the last real token instead, named so (`"block12:last"`), and warns the first time. `blocks=[...]` asks for more blocks,
-and `kinds=("prompt", "last", "mean")` for the other two summaries: the last real token and the mean over all real tokens.
+1. **Which stack is the language backbone.** A VLA keeps its blocks in several stacks: one reads the pictures (the vision
+   encoder), one reads the pictures and the words together (the language backbone), and often one makes the movements
+   (the action expert). In PyTorch a stack is a list of at least 4 blocks of the same kind. The tap notes how wide each
+   stack's vectors are and how many tokens it sees. The language backbone has the width of the model's **word table**
+   (the table that gives every word its vector, an `nn.Embedding`), and since it reads the pictures and the words
+   together, it sees many tokens. So the tap keeps the stack of that width that saw the most tokens (if no stack has that
+   width, the stack with the most tokens). The width matters: in some VLAs the vision encoder sees even more tokens than
+   the backbone, but only the backbone has the word table's width.
+2. **Which block.** The one two thirds of the way up that stack.
+3. **Where the prompt's words are.** In every call the word table gives out one vector for each word of the prompt, and
+   these vectors arrive at the backbone's input, at the prompt's places. The picture tokens come from the vision encoder
+   and match none of them. So the places whose vector matches one the word table gave out are the words. (The tap
+   compares the vectors' directions, not their lengths, because Gemma multiplies every word vector by the same number.)
+   The attention mask the model gives the block marks the padding, which is left out.
+
+From the second call on the tap listens to that block only. After each call it averages the block's output over the
+prompt's words: one vector per call, 2,048 numbers for π0.5.
+
+Special cases:
+
+- **A block the hook does not see.** Some models call the parts of a block one by one in a loop of their own, so the
+  forward hook on the block never fires. Then the tap reads the input of the next block's first
+  norm (the normalisation layer a block starts with), which holds the same numbers; `tap.how` says which way it uses. The
+  norm gets no attention mask, so the tap takes the mask the model last gave to a module on the way to the stack.
+- **A backbone that runs several times in one call** (an autoregressive policy, once per new token) is read in the pass
+  with the most tokens.
+- **No words found** (a model that adds position vectors to the words first): the tap hands out the last real token
+  instead, named so (`"block12:last"`), and warns the first time.
+- **More summaries:** `blocks=[...]` asks for more blocks, and `kinds=("prompt", "last", "mean")` for the other two
+  summaries: the last real token and the mean over all real tokens.
 
 **What the automatic tap cannot do:** reading at the next norm assumes blocks that start with their norm, as recent
-language models do. A stack whose blocks are of different classes is not found; name it with `stack=`. The words are found
+language models do. A stack whose blocks are of different kinds is not found; name it with `stack=`. The words are found
 only where the backbone's input holds the word table's vectors unchanged, up to their length.
 
 ## Prerequisites
@@ -103,46 +119,58 @@ The policy servers that hand out the state:
   python -m lerobot_server --policy <hub id or folder> --port <port>
   ```
 
-- **Another policy:** its own server adds `reply["policy_state"] = state_entry(names, values)` to every reply
-  (`vla_memory/taps/reply.py`), with one of the taps below. `AutoTap` gives the names (`tap.names`). With `TorchStateTap`
-  or `JaxStateTap`, name the summary yourself by the same rule, for example `state_entry(["block12:prompt"], tap.read()[:1])`.
+- **Another policy:** its own server hands out the state with every reply (`vla_memory/taps/reply.py`), as below.
 
-The automatic tap, on any PyTorch policy:
+**Who writes the code below.** For openpi's π0.5 and LeRobot's policies, nobody: the two servers above already contain
+it. Only for another policy does whoever sets up its server add a few lines to the server's code, once, around the place
+where the server calls the policy. With the automatic tap they are the lines `lerobot_server.py` has:
 
 ```python
 from vla_memory.taps.auto import AutoTap
+from vla_memory.taps.reply import state_entry
 
-tap = AutoTap(model)            # the policy's torch module; stack=, blocks= and kinds= choose by hand
-tap.start_call()                # before each call
-actions = policy(...)           # the policy's own forward pass, unchanged
-values = tap.read()             # (1, width) float32, named in tap.names: ["block12:prompt"] for π0.5
+tap = AutoTap(model)                    # once, after loading the policy (model: its torch module)
+
+def infer(observation):                 # the server's handler, at every call
+    tap.start_call()                                        # before the policy runs
+    reply = {"actions": policy(observation)}                # the policy's own call, unchanged
+    values = tap.read()                                     # (1, width): this call's state; also sets tap.names
+    reply["policy_state"] = state_entry(tap.names, values)  # named ["block12:prompt"] for π0.5
+    return reply
 ```
+
+The other taps have to be told what the automatic tap finds by itself: the layer to read, where the prompt's tokens
+begin (`start`), and which tokens are padding (`tap.valid`: one True or False per token, False for padding). The examples
+use π0.5's layout: its prompt begins at token 768, after its 3 pictures of 256 tokens each. Their summary has no name of
+its own, so give it one by the same rule, for example `state_entry(["block12:prompt"], tap.read()[:1])`.
 
 A tap on one chosen layer of a PyTorch model:
 
 ```python
 from vla_memory.taps.torch_tap import TorchStateTap
 
-tap = TorchStateTap(model, "model.layers.12", start=768)    # the mean over the tokens from position 768 on
-tap.valid = token_mask                                      # (batch, tokens), False for padding
+tap = TorchStateTap(model, "model.layers.12", start=768)    # block 12; the mean over the tokens from 768 on
+tap.valid = token_mask                                      # (batch, tokens): True for a real token, False for padding
 outputs = model(...)                                        # the model's own forward pass
 features = tap.read()                                       # (batch, width) float32
 tap.close()                                                 # removes the hook
 ```
 
-A flax linen model:
+A flax linen model (JAX). JAX cannot listen in, so the model's own pass returns the layer's output, and the tap only
+averages it:
 
 ```python
 from vla_memory.taps.jax_tap import JaxStateTap, linen_tapped
 
-run = jax.jit(linen_tapped(model, "layers_12"))             # the model's apply, plus the output of layers_12
-outputs, hidden = run(variables, inputs)
-tap = JaxStateTap(start=768)
-tap.valid = token_mask
-features = tap.capture(hidden)
+run = jax.jit(linen_tapped(model, "layers_12"))             # the model's apply, also returning layers_12's output
+outputs, hidden = run(variables, inputs)                    # hidden: (batch, tokens, width), one vector per token
+tap = JaxStateTap(start=768)                                # the mean over the tokens from 768 on: the prompt
+tap.valid = token_mask                                      # True for a real token, False for padding
+features = tap.capture(hidden)                              # (batch, width): the mean over the prompt's real tokens
 ```
 
-openpi's π0.5, JAX or PyTorch (the policy as `policy_config.create_trained_policy` returns it):
+openpi's π0.5, JAX or PyTorch (the policy as `policy_config.create_trained_policy` returns it), as `openpi_server.py`
+uses it:
 
 ```python
 from openpi_tap import attach

@@ -17,7 +17,7 @@ more.
 
 A block is read by a forward hook or, if that never fires (a model whose own loop calls a block's parts one by one), by a
 pre-hook on the next block's first norm, whose input is the same residual stream (tap.how): for pre-norm blocks, with the
-attention mask last given to a module on the way to the stack, whose forwards are wrapped (SmolVLA calls its backbone's
+attention mask last given to a module on the way to the stack, whose forwards are wrapped (a model may call its backbone's
 forward directly, past any hook). A backbone run several times in a call (an autoregressive policy) is read in its pass
 with the most tokens. The hooks only read; in a torch.compile'd model they work as TorchStateTap's (torch_tap.py), and the
 code compiled around the first call's many hooks is dropped, so the next call compiles once more.

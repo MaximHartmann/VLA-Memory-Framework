@@ -11,7 +11,7 @@ and observation/wrist_image become the policy's cameras in order, and observatio
 the float tensor LeRobot expects, and the prompt becomes the task. The reply holds the action chunk, "actions" (steps,
 action size), and "policy_state" (vla_memory/taps/reply.py): the automatic tap's summary of the policy's language backbone
 (vla_memory/taps/auto.py), two thirds of the way up and averaged over the prompt's words, as every server of the framework
-hands it out ("block11:prompt" for SmolVLA). memory/new_episode True resets the policy. LeRobotPolicy is the policy part,
+hands it out (named after its block, like "block12:prompt"). memory/new_episode True resets the policy. LeRobotPolicy is the policy part,
 serve() the network part. Runs in a LeRobot environment with the framework, this folder, openpi_client and websockets on
 the path.
 """

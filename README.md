@@ -1,46 +1,63 @@
 # VLA-Memory-Framework
 
-A framework to incorporate different kinds of knowledge bases and memory into a robotic AI agent built on a
-vision-language-action (VLA) policy.
+A framework to add different kinds of knowledge bases and memory to a robotic AI agent built on a vision-language-action
+(VLA) policy.
 
-A VLA policy maps the current camera images and a language instruction to robot actions. On its own it is
-memoryless: it does not know what it has already done in the current task, it does not learn from earlier tasks, and
-it cannot adapt to a user over time. This framework adds that missing part. It defines the places where memory can
-live in a VLA agent: the working memory of the running task, long-term memory kept outside the models in a store,
-knowledge written into the models' weights, and the symbolic task state. It provides the interfaces to plug a memory
-method into the control loop and collects reference implementations, so that different memory methods and knowledge
-bases can be built, exchanged and compared against the same policy, the same task and the same metrics.
+A **VLA policy** is a neural network that turns the current camera pictures and a written instruction into robot
+movements. On its own it has no memory: it does not know what it has already done in the current task, it does not learn
+from earlier tasks, and it cannot adapt to a user over time. This framework adds the missing part. It names the places
+where memory can live in an agent built on a VLA policy:
 
-The framework is model-agnostic: the VLA policy, the language or vision-language model, the task and the memory
-method are replaceable components behind small interfaces.
+- the **working memory** of the running task;
+- a **long-term memory**, kept outside the models in a store;
+- **knowledge in the models' weights**, written there by training;
+- the **symbolic task state**: which steps of the task are done.
+
+It provides the interfaces to plug a memory method into the robot's control loop, and reference implementations of
+several methods. So different memory methods and knowledge bases can be built, exchanged and compared against the same
+policy, the same task and the same measures.
+
+The framework is model-agnostic: the VLA policy, the language or vision-language model, the task and the memory method are
+replaceable parts behind small interfaces.
+
+## How it works
+
+The framework runs as a **proxy**: a small server between the environment (a simulator or a robot program) and the server
+of the VLA policy. The environment sends its observations to the proxy instead of the policy server. The proxy changes
+what the policy sees, forwards the observation, and returns the policy's actions.
+
+The robot does a task as a sequence of **skills**, short steps the policy was trained on: for example "pick up the red
+block", "place the red block", "pick up the blue block", "place the blue block". The ordered list of skills is the
+**plan**. An **episode** is one attempt at the whole task, and a **policy call** is one request to the policy: one
+observation in, a short chunk of actions out. Two exchangeable parts run in the proxy at every call:
+
+- a **writer** decides when a step of the task is done: it keeps the plan and moves on to the next skill when it judges the
+  current one complete;
+- a **method** turns that decision into what the policy receives, for example the current skill as the prompt.
 
 ## Getting started
 
-A proxy sits between the environment (a simulator or a robot) and the VLA policy server and relays every observation. Two
-exchangeable components run in it. A **writer** decides when a step of the task is done: it keeps the plan, the task's
-skills in order (for example pick up the red block, place it, pick up the blue block, place it), and moves on to the next
-skill when it judges the current one complete. A **method** turns that decision into what the policy receives, for example
-the current skill as the prompt.
-
 ### Install
 
-Python 3.10 or newer. The proxy talks to the policy server through openpi's client library, which is installed from the
-openpi repository; then install this repository with the proxy's extra:
+You need Python 3.10 or newer. The proxy talks to the policy server through openpi's client library, which is installed
+from the openpi repository. Then install this repository with the proxy's extra:
 
 ```
 pip install -e <openpi checkout>/packages/openpi-client
 pip install -e ".[proxy]"
 ```
 
-What else a run needs:
+A run also needs:
 
-- a policy server for the VLA: any policy served over openpi's websocket protocol (such as openpi's `serve_policy.py`), or
-  another protocol through `--transport`. The policy must be trained for the chosen method ([What the policy must
-  accept](#what-the-policy-must-accept));
-- the environment that would otherwise talk to the policy server. It connects to the proxy instead and adds a few entries
-  for the proxy to every observation (below);
-- for `--writer vlm`, a vision-language model behind an OpenAI-compatible API, such as vLLM (`--vlm-url`, `--vlm-model`);
-- for the session store, `pip install -e ".[session_store]"` (and `".[session_store_encoders]"` for its image-embedding keys).
+- **a policy server** for the VLA: any policy served over openpi's websocket protocol (such as openpi's
+  `serve_policy.py`), or another protocol through `--transport`. The policy must be trained for the chosen method
+  ([What the policy must accept](#what-the-policy-must-accept));
+- **the environment** that would otherwise talk to the policy server. It connects to the proxy instead and adds a few
+  entries for the proxy to every observation (below);
+- for `--writer vlm`, **a vision-language model** behind an OpenAI-compatible API, such as vLLM (`--vlm-url`,
+  `--vlm-model`);
+- for the session store, `pip install -e ".[session_store]"` (and `".[session_store_encoders]"` for its image-embedding
+  keys).
 
 ### Run: a writer and a method
 
@@ -48,11 +65,14 @@ What else a run needs:
 python -m vla_memory.proxy --writer NAME --method NAME --task FILE --listen-port <port> --upstream-port <policy port>
 ```
 
-`--task` names the task file (below); for the reference task it can be left out. The proxy listens on `<port>` and forwards to the policy server on `<policy port>`. The environment connects to `<port>`
-instead of the policy server and otherwise runs as before: it sends the full task instruction as the prompt, plus entries
-for the proxy whose names start with `memory/`, for example that a new episode starts or the gripper's readings since the
-previous call. `vla_memory/env_keys.py` builds these entries from the environment's raw signals. The proxy removes them
-before it forwards the observation, except the two that mark a new episode, which a policy with its own memory needs.
+The proxy listens on `<port>` and forwards every call to the policy server on `<policy port>`. `--task` names the task file
+(below); for the reference task you can leave it out. After the install, `vla-memory-proxy` is the same command.
+
+The environment connects to `<port>` instead of the policy server and otherwise runs as before. It sends the full task
+instruction as the prompt, plus entries for the proxy whose names start with `memory/`: for example that a new episode
+starts, or the gripper's readings since the previous call. `vla_memory/env_keys.py` builds these entries from the
+environment's raw signals. The proxy removes them before it forwards the observation, except the two that mark a new
+episode (`memory/new_episode`, `memory/episode`), which a policy with its own memory needs.
 
 `--writer` chooses who decides that a skill is complete:
 
@@ -71,26 +91,35 @@ before it forwards the observation, except the two that mark a new episode, whic
 | `history` | the full instruction with a line per completed skill; the policy is trained on such prompts | the completed skills as text in the policy's input | [docs/methods/history](docs/methods/history/README.md) |
 | `keyframe` | the plain instruction, and in the third image slot the wrist picture of the moment the last skill was completed | a picture of the last key moment in the policy's input | [docs/methods/keyframe](docs/methods/keyframe/README.md) |
 
-Every writer drives every method. `--writer off` hands the policy the instruction unchanged; without `--writer` and
-`--method` the proxy runs `vlm` with `subgoal`. `--with NAME` adds an extension ([other methods](#other-methods)), and
-`--help` together with a choice lists that choice's options. The measured results of the writer and method combinations on
-the reference task are on [their own page](docs/results/README.md).
+- Every writer drives every method. `--writer off` hands the policy the instruction unchanged (the memoryless baseline).
+  Without `--writer` and `--method` the proxy runs `vlm` with `subgoal`.
+- `--with NAME` adds an extension, an optional memory that plugs into the proxy ([other methods](#other-methods)).
+- `--help` together with a choice lists that choice's options, for example
+  `python -m vla_memory.proxy --writer vlm --method subgoal --help`.
+- `--log FILE` writes one JSON line per policy call: what the writer decided and what the policy received.
+- Ctrl-C or SIGTERM stops the proxy cleanly: it closes the open connections, lets the extensions save the last episode,
+  and closes its log.
+
+The measured results of the writer and method combinations on the reference task are on
+[their own page](docs/results/README.md).
 
 ### Tasks
 
 Everything about the task comes from one task file in YAML: the objects, the skills, how to tell that each skill is
 complete, and the prompt texts. Without `--task FILE` the proxy uses the reference task,
-[`vla_memory/tasks/red_blue_blocks.yaml`](vla_memory/tasks/red_blue_blocks.yaml). On the framework's side a new task needs no
-code, only a new task file: [Creating a new task](docs/tasks/README.md). The policy behind the proxy must of course be able
-to do the new task's skills. If the objects change from episode to episode, the environment names each episode's objects
-(`memory/objects`) and the writers plan for those.
+[`vla_memory/tasks/red_blue_blocks.yaml`](vla_memory/tasks/red_blue_blocks.yaml): a Franka arm picks up a red block and
+puts it back, then the blue one. On the framework's side a new task needs no code, only a new task file:
+[Creating a new task](docs/tasks/README.md). The policy behind the proxy must of course be able to do the new task's
+skills. If the objects change from episode to episode, the environment names each episode's objects (`memory/objects`),
+and the writers plan for those.
 
 ## What the policy must accept
 
 Any VLA policy works behind the proxy if it was trained on the inputs its method and extensions produce. The writer only
-decides when a skill is complete, so what the policy reads follows from the method and the extensions. Each row below names
-the script in `training/` that builds the matching training dataset, in LeRobot format, from recorded demonstrations
-(`training/README.md`). The strings in the training data are the ones the proxy sends at run time, which the task file defines.
+decides when a skill is complete, so what the policy reads depends on the method and the extensions alone. Each row below
+names the script in `training/` that builds the matching training dataset, in LeRobot format, from recorded
+demonstrations ([training/README.md](training/README.md)). The strings in the training data must be the ones the proxy
+sends at run time, which the task file defines.
 
 | in the run | the policy must accept | training data |
 |---|---|---|
@@ -103,17 +132,67 @@ the script in `training/` that builds the matching training dataset, in LeRobot 
 | `--with notebook` | nothing extra: it changes which of the task's skills the VLM writer plans and when it moves on | |
 | `--with session_store` | nothing extra: it is the memory of the VLM writer's monitor | |
 | `--writer oracle`, `rules`, `vlm` | nothing from the policy | |
-| `--writer head` | its internal features go to the head: the head's server reads them and returns a verdict with every reply; as shipped it reads those of an openpi pi0.5 policy, so it runs on openpi policies only | `fit_event_head.py` fits the head on the policy's rollouts |
+| `--writer head` | its server hands out a summary of the policy's internal state with every reply (`policy_state`), which the head in the proxy scores; the framework's servers do this for openpi's π0.5 (JAX or PyTorch) and for any LeRobot policy, another VLA's server needs a [state tap](docs/taps/README.md) | the proxy records the policy's own runs (`--record-head`), `fit_event_head.py --recordings` fits the head on them |
 
-The proxy reaches the policy through the openpi serving protocol: msgpack-encoded numpy arrays over a websocket, through the
-`openpi_client` library. It reads the server's metadata once and then sends one observation per policy call: the environment's
-own keys (the reference: `observation/image`, `observation/wrist_image`, `observation/state`) with the `prompt` the method
-decided, the episode markers `memory/new_episode` and `memory/episode` as the environment sent them and, for a third picture,
-`observation/memory_image`. It expects a dict with `actions` back. A server that speaks this protocol, such as openpi's
-`serve_policy.py`, needs nothing else; for another protocol, `--transport` names a class with an `infer(observation)` method
-that returns `{"actions": ...}` (`vla_memory/transport.py`).
+**How the proxy reaches the policy.** It uses the openpi serving protocol: msgpack-encoded numpy arrays over a websocket,
+through the `openpi_client` library. It reads the server's metadata once and then sends one observation per policy call:
+the environment's own keys (in the reference task `observation/image`, `observation/wrist_image`, `observation/state`)
+with the `prompt` the method decided, the episode markers `memory/new_episode` and `memory/episode` as the environment sent
+them, and, for a third picture, `observation/memory_image`. It expects a dict with `actions` back. A server that speaks
+this protocol, such as openpi's `serve_policy.py`, needs nothing else. For another protocol, `--transport` names a class
+with an `infer(observation)` method that returns `{"actions": ...}` (`vla_memory/transport.py`).
+
+## Current restrictions (work in progress)
+
+The framework is young, and today a setup has to follow these rules. The list is meant to get shorter.
+
+**The policy**
+
+- It is served over openpi's websocket protocol, or a `--transport` class connects the proxy to its own server.
+- It answers one observation at a time with a chunk of actions; the environment carries out the chunk before the next
+  call.
+- It is trained for the method's inputs, with exactly the task file's strings
+  ([What the policy must accept](#what-the-policy-must-accept)).
+
+**The environment** (the simulator or the robot program)
+
+- It connects to the proxy instead of the policy server; each proxy serves one environment.
+- It sends the full instruction as `prompt` and, with every call, the `memory/` entries (`vla_memory/env_keys.py`,
+  `ControlKeys`): always the episode markers, plus what the chosen writer reads (for the oracle the simulator's current
+  skill, for the rules writer the gripper readings of every control step, for the VLM writer the raw camera pictures).
+- The policy's own observation keys pass through unchanged; a method that adds a picture sends it as
+  `observation/memory_image`.
+
+**The task**
+
+- One task file: a fixed set of objects and verbs, and every skill reads like the task's template ("pick up the red
+  block").
+- The robot does one skill at a time, following a plan: the task file's order, or one the VLM writer makes from the
+  instruction.
+- Completion rules exist for picking and placing with one two-finger gripper (one held object at a time) and for skills
+  described by signal thresholds; other kinds of skills need the VLM writer or new rules.
+- With the history and keyframe methods the last skill writes no line, and the history never holds more lines than the
+  policy's training data.
+
+**The writers**
+
+- `oracle`: works in simulation only, because it needs the simulator's tracker.
+- `rules`: needs thresholds measured on the policy's training demonstrations.
+- `vlm`: needs a vision-language model behind an OpenAI-compatible server.
+- `head`: needs a policy server that hands out the policy's state (openpi's π0.5, LeRobot's policies, or a PyTorch policy
+  with the automatic tap) and a head fitted for that policy and method; a JAX policy outside openpi needs a change to its
+  code.
+
+**What has been tested**
+
+- Live, only the reference task (a Franka arm and two cubes in Isaac Sim) with π0.5 policies; other tasks only in the
+  framework's tests, and no real robot yet.
+- The built-in memory and its training launcher work with openpi's π0.5 and the reference task only.
 
 ## Other methods
+
+These memories go beyond one writer and one method: some plug into the proxy as extensions (`--with NAME`), others are
+training recipes or live inside the policy.
 
 | method | what it is | what it is good for | page |
 |---|---|---|---|
@@ -130,5 +209,9 @@ that returns `{"actions": ...}` (`vla_memory/transport.py`).
 |---|---|---|
 | Frame window: the last 8-16 policy calls as compressed frame summaries, pooled into the action expert's conditioning | 6-12 of 100 in two versions (the [built-in memory](docs/methods/builtin_memory/README.md) on the same data: 34-39); the information was in the window, but the attention barely picked it out (in the second version the decisive frames got only 1.6 times their equal share) and the action expert did not use it | [docs/methods/frame_window](docs/methods/frame_window/README.md) |
 
-Each further writer or method gets its own page under `docs/writers/` or `docs/methods/` and a row in these tables; an idea
-that was evaluated and did not work gets a page and a row here.
+## Adding your own
+
+Each further writer or method gets its own page under `docs/writers/` or `docs/methods/` and a row in these tables; an
+idea that was evaluated and did not work gets a page and a row under "Tried and not adopted". A writer, method, extension
+or transport of your own needs no change to the framework: `--writer`, `--method`, `--with` and `--transport` also take an
+import path `module:Class`, or the name of an entry point that an installed package declares.

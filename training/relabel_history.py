@@ -53,7 +53,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--src", required=True)
     parser.add_argument("--dst", required=True)
-    parser.add_argument("--raw-dir", default="data/demos_v2_full")
+    parser.add_argument("--raw-dir", required=True, help="the recorded demonstrations (episode_*.npz)")
     parser.add_argument("--start", type=int, default=0)
     parser.add_argument("--task", default=None, help="task YAML/JSON (default: the packaged red_blue_blocks task)")
     parser.add_argument("--dry-run", action="store_true")

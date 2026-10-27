@@ -19,7 +19,7 @@ Output: <root>/<repo-id>_train and <root>/<repo-id>_val with every frame of FRAM
     memory_image   the keyframe (stored like wrist_image; all zero: no keyframe yet)
 
 plus keyframe_frames.csv in each dataset folder: per frame its event, the event's first frame and the source frame of the
-keyframe (-1: none). Run where lerobot is installed (the openpi environment) with the framework on PYTHONPATH.
+keyframe (-1: none). Run where lerobot is installed (the openpi environment).
 
     python training/relabel_keyframe.py --train <frames train>:<history train> --val <frames val>:<history val> \
         --root <dataset root> --repo-id <user>/<name>
@@ -34,13 +34,13 @@ import sys
 import numpy as np
 import pyarrow.parquet as pq
 
-from vla_memory.methods.history.prompt import HistoryPrompt
-from vla_memory.methods.keyframe import labels
-from vla_memory.task import TaskSpec
-
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the shared helpers, also when the script is loaded by its path
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))   # the framework, when it is not installed
 from lerobot_tools import (create_memory_dataset, decode_png, episode_files, output_dataset, read_info, read_tasks,  # noqa: E402
                            write_manifest)
+from vla_memory.methods.history.prompt import HistoryPrompt  # noqa: E402
+from vla_memory.methods.keyframe import labels  # noqa: E402
+from vla_memory.task import TaskSpec  # noqa: E402
 
 COLUMNS = ("image", "wrist_image", "state", "actions", "timestamp", "frame_index", "episode_index", "index", "task_index")
 MANIFEST = "keyframe_frames.csv"

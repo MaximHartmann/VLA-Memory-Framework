@@ -19,7 +19,7 @@ plus memory_frames.csv in each dataset folder: per frame the retrieved entry, it
 Building the store and labelling the frames is vla_memory.methods.memory_policy.build; this script reads, calls it and
 writes. The finger width comes from the dataset's state (finger_width: the red/blue convention). The task file (--task,
 default the packaged red/blue task) gives the colours of the retrieval key and the skill list. Run where lerobot is installed
-(the openpi environment) with the framework on PYTHONPATH.
+(the openpi environment).
 """
 from __future__ import annotations
 
@@ -32,15 +32,15 @@ import sys
 import numpy as np
 import pyarrow.parquet as pq
 
-from vla_memory.methods.memory_policy import build
-from vla_memory.methods.memory_policy.gripper import gripper_state
-from vla_memory.methods.memory_policy.key import WristKey
-from vla_memory.methods.memory_policy.pictures import Pictures
-from vla_memory.methods.memory_policy.store import MomentStore, save_store
-from vla_memory.task import TaskSpec
-
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the shared helpers, also when the script is loaded by its path
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))   # the framework, when it is not installed
 from lerobot_tools import create_memory_dataset, decode_png, episode_files, output_dataset, read_info, read_tasks, write_manifest  # noqa: E402
+from vla_memory.methods.memory_policy import build  # noqa: E402
+from vla_memory.methods.memory_policy.gripper import gripper_state  # noqa: E402
+from vla_memory.methods.memory_policy.key import WristKey  # noqa: E402
+from vla_memory.methods.memory_policy.pictures import Pictures  # noqa: E402
+from vla_memory.methods.memory_policy.store import MomentStore, save_store  # noqa: E402
+from vla_memory.task import TaskSpec  # noqa: E402
 
 FINGER_SCALE = 0.04          # m: the red/blue state's last value is 1 - (one finger's opening) / FINGER_SCALE
 PICTURE_CACHE = 2048         # decoded store pictures kept while writing (230 KB each)

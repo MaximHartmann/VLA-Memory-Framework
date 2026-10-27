@@ -6,7 +6,7 @@ Writers (--writer):
     oracle     the simulator's ground truth (memory/oracle_prompt)
     rules      rules on the robot's gripper and hand signals (the task file's history.rules)
     vlm        the VLM planner, with the exemplar store (default)
-    head       the policy's own event head (a policy server that returns its verdict)
+    head       the policy's own event head (--head-dir; a policy server that hands out the policy's state)
     off        none: the policy gets the instruction
 Methods (--method):
     subgoal    the current skill as the prompt (default)
@@ -14,9 +14,10 @@ Methods (--method):
     keyframe   the instruction, and the wrist picture of the last key moment as a third picture
 
 Option groups: the connection (--listen-port, --upstream-port, --upstream-host, --transport, --transport-arg, --log), the
-task and the choices (--task, --writer, --method, --image-keys), the policy's own memory (--memory-reset) and the extensions
-(--with NAME, repeatable). The chosen writer, method and extensions add their own options; --help with the choices lists
-them. The defaults are --writer vlm --method subgoal: the planner loop.
+task and the choices (--task, --writer, --method, --image-keys), the policy's own memory (--memory-reset), the recording for
+an event head (--record-head DIR, --record-head-calls N) and the extensions (--with NAME, repeatable). The chosen writer,
+method and extensions add their own options; --help with the choices lists them. The defaults are --writer vlm --method
+subgoal: the planner loop.
 
 The episode markers memory/new_episode and memory/episode always reach the policy as the environment sent them, so that a
 policy that keeps its own memory resets it when an episode starts. --memory-reset every-call marks every call as a new
@@ -33,6 +34,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import signal
 from typing import Sequence
 
@@ -95,12 +97,24 @@ def add_policy_memory_options(parser: argparse.ArgumentParser):
                              "test)")
 
 
+def add_recording_options(parser: argparse.ArgumentParser):
+    """The recording of the policy's state for fitting an event head (writers/head/record.py)."""
+    parser.add_argument("--record-head", default=None, metavar="DIR",
+                        help="keep the policy's state of every call (and, after a completed skill, of the extra questions "
+                             "with the old input) in DIR, one file per episode, for training/fit_event_head.py "
+                             "--recordings; the policy server must hand out its state")
+    parser.add_argument("--record-head-calls", type=int, default=3, metavar="N",
+                        help="the calls after a completed skill at which the policy is asked once more with the old input "
+                             "(default 3)")
+
+
 def build_parser(writer_class, method_class, extension_classes: Sequence[type] = ()) -> argparse.ArgumentParser:
     """The command line with the options of the chosen writer, method and extensions."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_connection_options(parser)
     add_task_options(parser)
     add_policy_memory_options(parser)
+    add_recording_options(parser)
     add_choice_options(parser)
     writer_class.add_arguments(parser)
     method_class.add_arguments(parser)
@@ -169,6 +183,14 @@ def build_components(args, task: TaskSpec, extension_classes) -> tuple:
     return extensions, writer, method
 
 
+def build_recorder(args):
+    """The recorder of --record-head, or None."""
+    if not getattr(args, "record_head", None):
+        return None
+    from ..writers.head.record import StateRecorder
+    return StateRecorder(args.record_head, calls=args.record_head_calls)
+
+
 def component_metadata(args) -> dict:
     """The metadata's entries for components other than the defaults (none for the defaults)."""
     metadata = {}
@@ -204,25 +226,35 @@ def main(argv=None):
     except ValueError as error:
         parser.error(str(error))
     relay = Relay(build_transport(args), writer, method, args.log, image_keys=args.image_keys, task=task,
-                  extensions=extensions, memory_reset=args.memory_reset)
+                  extensions=extensions, memory_reset=args.memory_reset, recorder=build_recorder(args))
     serve(relay, args.listen_host, args.listen_port, proxy_metadata(args, task, writer, method, extensions))
 
 
 def serve(relay: Relay, host: str, port: int, metadata: dict):
-    """Run the frontend until the process is stopped (Ctrl-C, or SIGTERM as the launchers send it), then close the relay
-    so that the extensions take the last episode."""
-    signal.signal(signal.SIGTERM, _exit_on_sigterm)
+    """Run the frontend until SIGTERM (as the launchers send it) or Ctrl-C, then close the relay so that the extensions take
+    the last episode, also while an environment client is still connected."""
     try:
-        asyncio.run(ProxyServer(relay, host, port, metadata).run())
-    except (KeyboardInterrupt, SystemExit):
+        asyncio.run(serve_until_stopped(ProxyServer(relay, host, port, metadata)))
+    except KeyboardInterrupt:              # Ctrl-C before the frontend listens
         log.info("stopping")
     finally:
         relay.close()
 
 
-def _exit_on_sigterm(signal_number, frame):
-    """Turn SIGTERM into a SystemExit, so that serve() closes the relay like after Ctrl-C."""
-    raise SystemExit(0)
+async def serve_until_stopped(server: ProxyServer):
+    """Serve until SIGTERM or Ctrl-C (SIGINT); the frontend then closes the open connections and waits for their calls. A
+    second signal ends the process at once (a policy call that hangs would otherwise keep it waiting)."""
+    loop = asyncio.get_running_loop()
+
+    def stop():
+        if server.stop.is_set():
+            log.warning("second stop signal: exiting without waiting for the policy call in progress")
+            os._exit(1)
+        server.stop.set()
+
+    for signal_number in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(signal_number, stop)
+    await server.run()
 
 
 if __name__ == "__main__":

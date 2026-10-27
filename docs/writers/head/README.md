@@ -1,128 +1,109 @@
-# The head writer: the policy writes its own history
+# The head writer: the policy itself says when a skill is done
 
 ## The idea
 
 Every method needs a writer that says when a skill is done. The other writers watch the robot from the outside: the
 simulator's tracker, rules on the gripper's readings, or a vision-language model looking at the cameras. The head writer
-asks a different question: does the policy itself already know when a skill is done? It sees the same pictures and the same
-prompt, so the answer may already be somewhere inside its own computation.
+asks the policy itself. It sees the same pictures and the same prompt, so it may already know.
 
-![One policy call with the head writer and the history method](detailed/head_call.svg)
+![One policy call with the head writer](detailed/head_call.svg)
 
-How it works, in short:
+- At every call the policy server also hands out 2,048 numbers from inside the policy: a layer two thirds of the way up,
+  averaged over the prompt's words, read during the policy's own computation by a [state tap](../../taps/README.md). The
+  policy itself is not changed.
+- In the proxy, the **event head**, a small formula (a weighted sum of the 2,048 numbers plus a constant), turns them into
+  one score. A score above a threshold means "done".
+- After two "done" in a row the skill is complete, and the method shows that to the policy from the next call on: a new
+  history line, the next skill as the prompt, or a new memory picture.
+- The head is fitted on recordings of the policy's own runs, in which another writer, the teacher, said when each skill was
+  done.
 
-- At every policy call, the policy server also runs a small add-on, the **event head**. It reads the policy's inner
-  representation of this call: the output of one of its internal layers (block 12 of 18), averaged over the words of the
-  prompt. That is a list of 2,048 numbers.
-- A **logistic regression**, a weighted sum of these 2,048 numbers plus a constant, turns them into one score. A score of at
-  least 0.571 means "done".
-- The verdict travels back to the proxy together with the actions. When the head says "done" at **two calls in a row**, the
-  writer writes the skill's line into the history ("picked up the red block"). The policy sees the new line from the next
-  call on.
-- The policy itself is not changed. The head is fitted afterwards, on recordings of the policy's own runs, labelled by the
-  rules writer.
-
-**Why this is worth trying.** If it works, the robot needs no extra sensors and no extra model to keep track of its task:
-the policy writes its own memory. It also answers a research question: does a VLA represent the progress of its task
-inside? Our answer is yes, and a simple linear read-out is enough to get it out (see the findings).
-
-**It depends on the policy, completely.** The head reads the policy's own internal numbers:
-
-- another policy, another fine-tune, even another checkpoint of the same model has a different inner representation, so
-  the head must be fitted again, on that policy's own runs;
-- it was fitted on prompts with history lines, so it belongs to the history method; with another method the policy sees
-  other prompts, and the head would have to be fitted for those;
-- the server has to reach inside the model: as shipped it reads the backbone of an openpi π0.5 policy, so it works with
-  openpi π0.5 policies only.
+**Why it is worth trying.** The robot needs no tracker, no extra sensors and no second model to keep track of its task.
+It also answers a research question: does a VLA know inside how far its task has come? It does, and a simple formula reads
+it out.
 
 **What it cannot do well:**
 
-- **It is slow as built.** The head computes the policy's first 13 blocks a second time for every call, which adds about
-  545 ms per call. Reading the layer from the policy's
-  own computation would make it almost free; that is not built.
-- **It copies its teacher.** It learned from the rules writer's labels, on one policy, one instruction and one camera setup,
-  in simulation.
-- **It misses rare events**, such as a block dropped right after the lift, or a hand that slides along the table after the
-  release instead of rising.
-- **It decides after the policy call**, so a line reaches the policy one call later than with the other writers.
-- **The last skill writes no line** (as in the policy's training data), so it never reports that the whole task is
-  finished.
+- **One head per policy and method.** The numbers are the policy's own, so another policy, a retrained one or another
+  method needs a new recording and fit.
+- **It copies its teacher**, mistakes included.
+- **It does not check which block is in the hand.** If the policy grasps the wrong block, the head still marks the skill
+  done.
+- **It is one call late**, because it judges the policy's answer. With the keyframe method that even helped (findings).
+- **The last skill is never marked done**, as in the policy's training data.
 
-A walkthrough of how it works: where the head sits, why it is built this way, how it is trained and the code:
-[detailed/README.md](detailed/README.md).
+How it works inside, why it is built this way, and the code: [detailed/README.md](detailed/README.md).
 
 ## Prerequisites
 
-- A policy served with openpi (π0.5), here the history policy ([the history method](../../methods/history/README.md)).
-- Recorded runs of that policy, not demonstrations: the camera pictures of every control step, and either the gripper
-  readings the rules writer uses (finger width, squeeze, fingertip position) or the number of finished skills at every
-  step.
-- The openpi environment and one GPU, to compute the features for the fit and to serve the policy; the fit itself runs on
-  the CPU.
+- A policy and the method it was trained for: [history](../../methods/history/README.md),
+  [sub-goal](../../methods/subgoal/README.md) or [keyframe](../../methods/keyframe/README.md).
+- A policy server that hands out the policy's state: `integrations/openpi/openpi_server.py` for openpi's π0.5 (JAX or
+  PyTorch), `integrations/lerobot/lerobot_server.py` for LeRobot's policies, or a few lines with the
+  [automatic tap](../../taps/README.md) in another PyTorch policy's own server.
+- A teacher for the recording: the rules writer (on a real robot too) or the simulator's ground truth.
 
 ## How to use it in the framework
 
-1. **Record runs** of the history policy with another writer, for example `--writer rules`, and keep the pictures. One
-   `.npz` file per episode with `exterior`, `wrist`, `instruction`, and either `rows` (the gripper readings, which the rules
-   writer turns into labels) or `reference` (the number of finished skills per step). `training/fit_event_head.py`
-   describes the arrays.
-2. **Fit the head:**
+1. **Serve the policy with its state**, for example openpi's π0.5 or a LeRobot policy
+   (`integrations/openpi/README.md`, `integrations/lerobot/README.md`):
 
    ```
-   python training/fit_event_head.py --episodes 'rollouts/*.npz' --config <policy config> \
-       --checkpoint <checkpoint dir> --center-crop 0.95 --features rows.npz --out <head dir> [--jax-cache DIR]
+   python -m openpi_server --port 8000 --config <openpi config> --checkpoint <checkpoint dir> --center-crop 0.95
+   python -m lerobot_server --port 8000 --policy <hub id or folder>
    ```
 
-   `--config` is the policy's openpi training config. `--center-crop` is the centre crop of the outside picture that the
-   policy uses at inference (0.95 for our policies); use the same value here and at the server. The result is a folder with
-   `head.npz` (the weights and everything the head needs), `head.json` (how it was fitted) and `head.sha256` (a checksum,
-   checked whenever the head is loaded). No fitted head and no policy checkpoint come with the repository.
-3. **Serve the policy together with its head** (in the openpi environment). Every reply then carries
-   `event_head: {score, done, threshold, ms}`:
+2. **Record about 100 runs with the teacher** (we used 130):
 
    ```
-   python -m vla_memory.writers.head.server --port <server port> --config <policy config> \
-       --checkpoint <checkpoint dir> --center-crop 0.95 --head-dir <head dir> [--head-batch 8] [--jax-cache DIR]
+   python -m vla_memory.proxy --writer rules --method subgoal --record-head runs/ --listen-port 9000 --upstream-port 8000
    ```
 
-4. **Run the proxy with the head as the writer:**
+   At every call the proxy keeps the policy's numbers and the teacher's count of finished skills. At the 3 calls after a
+   finished skill it also asks the policy once more with the old input: that is the moment the head must learn to
+   recognise. The robot only acts on the real call. One file of about 250 KB per run.
+
+3. **Fit the head** (on the CPU, about a minute):
 
    ```
-   python -m vla_memory.proxy --writer head --method history --task task.yaml --listen-port <port> \
-       --upstream-port <server port> [--consecutive 2]
+   python training/fit_event_head.py --recordings 'runs/*.npz' --out head/
    ```
 
-   `--task` can be left out for the reference task. `--consecutive` is how many "done" verdicts in a row write a line.
-   Every line of the proxy's log holds, under `event_head`, the score, the verdict, the count of "done" verdicts in a row,
-   and the skill whose line was written, if any (`wrote`).
+   It prints how well the head tells "done" from "not done" (the AUROC: 1.0 is perfect, 0.5 is guessing) and saves the
+   head in `head/`.
 
-`--head-batch 8` (the default) and `--jax-cache` make the server's scores match the fit's numbers exactly; the detailed page
-explains why.
+4. **Run with the head as the writer**, with the method of the recording:
+
+   ```
+   python -m vla_memory.proxy --writer head --head-dir head/ --method subgoal --listen-port 9000 --upstream-port 8000
+   ```
+
+   With `--log FILE`, the proxy's log shows at every call the score, the verdict and the skill completed, if any.
 
 ## Our findings
 
-Reference task: pick up and put back a red and then a blue cube with a Franka arm in Isaac Sim. The history policy
-(checkpoint 28000), and a head fitted on 129 of its own runs labelled by the rules writer. 100 fresh seeds of 500 control
-steps, the same policy every time; only the writer of the history differs:
+Reference task: pick up and put back a red and then a blue cube with a Franka arm in Isaac Sim. Our three π0.5 policies,
+each with a head of its own, fitted on 130 of its own runs recorded by the proxy, with the rules writer as the teacher.
+100 fresh seeds of 500 control steps; for each policy only the writer differs. Full tasks of 100:
 
-| writer of the history | full tasks of 100 | time per policy call | 500-step episode |
+| policy | the head writer | simulator's ground truth | rules writer |
 |---|---|---|---|
-| the policy's event head | 78 | 714 ms | 86 s |
-| simulator's ground truth | 82 | 169 ms | 51 s |
-| rules writer | 79 | 172 ms | 51 s |
-| VLM writer | 77 | 1,630 ms | 143 s |
+| sub-goal | 91 | 92 | 94 |
+| history | 75 | 82 | 79 |
+| keyframe | 79 | 78 | 75 |
 
-- **No clear difference:** all four writers are close enough that the differences could be chance. Of the 22 failed
-  episodes, 20 had no writer error, mostly failed grasps; 2 failed after a missed line.
-- **The head's lines against the simulator's tracker:** 250 of 253 written, 236 of them exactly one call after the tracker,
-  7 in the same call, 6 later (up to 11 calls), 1 two calls early while the cube was rising (that episode succeeded),
-  3 missed, none false. On the 3,744 calls at which the skill was not done, the head said "done" 19 times (0.5 %); asking for
-  two in a row turned only one of these into a line.
-- **The teacher matters most.** Heads fitted on the demonstrations told the classes apart perfectly on other demonstrations
-  (AUROC 0.999 to 1.000) but not on the policy's own runs (0.85 to 0.93): they said "done" at the grasp, before the lift.
-  Fitted on the policy's own runs instead, the head reached AUROC 0.991 and wrote no early and no false line on 49 fresh
-  runs. AUROC is the chance that a "done" moment gets a higher score than a "not done" moment: 0.5 is guessing, 1.0 perfect.
-- **A small multilayer perceptron did no better** than the logistic regression (rollout AUROC 0.856 to 0.921 against 0.849
-  to 0.928); the problem was the training data, not the size of the head. The detailed page explains the choice.
-- **The price is time:** the exact head pass adds about 545 ms per call, more than the 533 ms that an 8-step action chunk
-  lasts at 15 Hz.
+- **About as good as the other writers.** Seeds that only one of two writers completed split 7 to 8 (sub-goal), 6 to 13
+  (history) and 15 to 14 (keyframe) between the head and the simulator: splits that chance produces. Of the 55 failed
+  runs, 48 had no head error, mostly failed grasps; the rest were mainly a "placed red" the history head never saw (5).
+- **Late, and that helps the keyframe policy.** The head takes the "placed red" picture a call or two after the simulator
+  would, with the hand higher (a median 12.8 against 9.9 cm above the cube). A picture with the hand low makes the keyframe
+  policy grasp red again ([the keyframe method](../../methods/keyframe/README.md)): that never happened with the head, 10
+  times with the simulator's events and 16 times with the rules writer.
+- **On time.** Of the 789 skills the simulator saw completed, the head marked 733 exactly one call later, 30 in the same
+  call and 14 later still; it missed 9, was early 3 times, and 4 times marked a skill the simulator never saw.
+- **Almost free.** A call takes as long as without the head (171 ms), the head itself under a millisecond, the fit one or
+  two minutes on the CPU, and the recordings of a policy 32 MB. In cross-validation the heads reached an AUROC of 0.994 to
+  0.997.
+- **The teacher matters most, not the size of the head.** Heads fitted on the scripted demonstrations said "done" at the
+  grasp, before the lift; fitted on the policy's own runs, these false alarms disappeared. A small neural network did no
+  better than the simple formula.

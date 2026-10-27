@@ -10,7 +10,6 @@ of past episodes, retrieved by fingerprint similarity) as long-term memory. See 
   question                   the texts of the plan request and the monitor question
   proprio.ProprioSummary     the last few gripper / hand-height readings as one sentence
   exemplar.ExemplarStore     the long-term memory: build, save, load, retrieve, few-shot content
-  exemplar_dir               the store's directory format, for a store that grows between episodes
   labels.PhaseLabeller       per-frame labels of recorded demonstrations for building a store (parse_episode_ids: "0-19,25")
   options                    the command line of the planning model and of the planner's decision rule
 The retrieval keys (fingerprints) are shared with other components: vla_memory/fingerprint.py.

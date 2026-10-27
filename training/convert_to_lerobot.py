@@ -34,7 +34,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--use-videos", action="store_true", default=True,
                         help="MP4 per episode instead of PNG per frame; far kinder to a network file system")
     parser.add_argument("--no-videos", dest="use_videos", action="store_false")
-    parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--overwrite", action="store_true",
+                        help="delete an existing --root folder, with everything in it, before writing")
     parser.add_argument("--start", type=int, default=0, help="first staged episode index (for train/val splits)")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--action-space", choices=["velocity", "absolute"], default="velocity",

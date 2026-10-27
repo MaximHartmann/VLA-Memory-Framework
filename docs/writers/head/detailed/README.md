@@ -1,10 +1,10 @@
 # The head writer in detail
 
-The short page, [docs/writers/head](../README.md), says what the head writer does and what we found. This page explains
-where the head sits and how it computes its verdict, why we built it this way and what we tried first, how it is trained,
-and how the code works from the recorded runs to the last policy call.
+The short page, [docs/writers/head](../README.md), says what the head writer does, how to use it and what we found. This
+page explains where the numbers come from and what the head does with them, why it is built this way, how it is trained,
+and how the code works.
 
-![One policy call with the head writer and the history method](head_call.svg)
+![One policy call with the head writer](head_call.svg)
 
 ## 1. The question behind it
 
@@ -16,7 +16,7 @@ A memory method needs someone to say when a skill is done. All the other writers
 
 But the policy itself already looks at the same pictures and the same prompt at every call. To choose its next movement, it
 must in some sense know whether the cube is still on the table, held, or already lifted. So the question is: **is the
-progress of the task already written somewhere inside the policy, and can we read it out?** If so, the policy can write its
+progress of the task already written somewhere inside the policy, and can we read it out?** If so, the policy can keep its
 own memory: no tracker, no extra sensors, no second model.
 
 **What others found.** Several groups have read things out of the inside of VLA policies:
@@ -26,52 +26,56 @@ own memory: no tracker, no extra sensors, no second model.
   event is appended to the prompt as text ("History: grabbed spoon, ..."). It reported 93.4 % against 68.2 % for a variant
   with frames at fixed intervals in simulation, and 80.0 % against 43.5 % on hardware.
 - **A progress probe on π0.5** (Bhardwaj et al., 2026, arXiv 2608.13474): a *linear* read-out of the averaged activations of
-  a fine-tuned π0.5 predicts how much of the task is left, with R² of about 0.95 on familiar tasks. It also flags stalls.
+  a fine-tuned π0.5 predicts how much of the task is left, with R² of about 0.95 on familiar tasks.
 - **Failure detectors on VLA internals:** SAFE (Gu et al., 2025, arXiv 2506.09937) reads a VLA's internal features with an
-  LSTM or a two-layer perceptron and calibrates its threshold on successful runs; Hide-and-Seek (Park et al., 2026,
-  arXiv 2605.30834) reads the action embeddings with an LSTM.
+  LSTM or a two-layer perceptron; Hide-and-Seek (Park et al., 2026, arXiv 2605.30834) reads the action embeddings with an
+  LSTM.
 - **Linear probes** as a research tool go back to Alain and Bengio (2016, arXiv 1610.01644): if a simple linear classifier
   can read a property from a layer of a network, the network represents that property there.
 
 **Our choice: a probe on the frozen policy.** UniMem retrains the policy with its head. We tried the cheapest thing first:
 leave the policy exactly as it is, record what it computes, and fit a small read-out afterwards. That costs no retraining,
-cannot harm the policy's movements, and can be tried and checked in hours. Retraining the policy together with its head
-stays the option if a probe is not good enough.
+cannot harm the policy's movements, and can be tried and checked in hours.
 
-**Why the history policy.** The head works with the [history method](../../../methods/history/README.md), where the prompt
-holds the instruction plus one line per finished skill. That matters: the head does not have to judge the scene alone; it
-has to notice that the scene and the history no longer agree. "The cube is lifted, but the history does not say 'picked up
-the red block' yet" is exactly the moment to write the line.
+**What the head looks for.** The head does not have to judge the scene alone; it notices when the scene and the method's
+input no longer agree. With the [history method](../../../methods/history/README.md): "the cube is lifted, but the history
+does not say 'picked up the red block' yet". With the [sub-goal method](../../../methods/subgoal/README.md): the prompt
+still says "pick up the red block" while the cube is already up. With the
+[keyframe method](../../../methods/keyframe/README.md): the memory picture still shows the previous key moment. That
+mismatch is exactly the moment to complete the skill.
 
-## 2. Where the head sits and how it computes its verdict
+## 2. Where the numbers come from and what the head does
 
-![Where the head sits: a tap on block 12 of the backbone](head_inside.svg)
+![Where the numbers come from and what the head does with them](head_inside.svg)
 
-π0.5 has two parts. A language-model **backbone** (18 Gemma blocks) reads the input: 256 tokens for each of its three
-image slots (the outside camera, the wrist camera, and a third slot that is empty for this policy), then the tokens of the
-prompt. An **action expert** reads the backbone's internal keys and values at every block and produces the next movements.
+π0.5 has two parts. A language-model **backbone** (18 blocks) reads the input: 256 tokens for each of its three picture
+slots (the outside camera, the wrist camera, and a third slot that only the keyframe policy uses, for its memory picture),
+then the tokens of the prompt. An **action expert** reads the backbone's inner results at every block and produces the next
+movements.
 
-The head taps the backbone after **block 12** (counting from 0) and does five simple steps:
+**In the policy server**, a state tap reads the backbone after **block 12** (counting from 0) while the policy computes its
+actions. Inside the backbone everything is numbers: each piece of input, a token, is a list of 2,048 numbers. A picture is
+cut into 256 small patches, each one token; the prompt is cut into words and parts of words, each one token too. Every block
+mixes information between the tokens, so after block 12 each token has taken in something of all the others. The tap
+averages the vectors of the prompt's tokens, number by number, and leaves out the padding that fills the prompt to its fixed
+length. The result is one list of **2,048 numbers**, sent with the actions in float16 (`reply["policy_state"]`). Because
+the prompt's tokens have taken in the pictures inside the backbone, their average sums up both. The actions come from the
+same pass and stay exactly what they are without the tap.
 
-1. **Pool:** average the block's output over the prompt's text tokens. Inside the backbone, everything is numbers: each
-   piece of input, a "token", is a list (a vector) of 2,048 numbers. A picture is cut into 256 small patches, and each patch
-   becomes one token; the prompt is cut into words and parts of words, and each becomes one token too. Every block takes
-   all these vectors and produces new ones, in which each token has taken in information from the others (that is what the
-   attention inside a block does). After block 12 there is still one vector per token: 768 for the three image slots, and
-   one per text token of the prompt. "Averaging over the text tokens" means taking only the prompt's vectors and averaging
-   them number by number: the first numbers of all of them, then the second numbers, and so on. The padding that fills the
-   prompt up to its fixed length is left out. The result is one vector of **2,048 numbers**. Because the text tokens have
-   taken in the pictures and the history inside the backbone, their average summarises both.
-2. **Round** them to float16, the precision in which the training rows were stored, so that training and use see the same
-   numbers.
-3. **Standardise** (z-score): subtract the mean of each number over the training rows and divide by its spread (standard
-   deviation). This puts all 2,048 numbers on the same scale.
-4. **Score:** the logistic regression computes `score = w · x + b`, a weighted sum of the 2,048 numbers (2,048 weights) plus
-   one constant (the bias). The score is a "logit": the higher, the more sure the head is that the skill is done; 0 means
-   50/50.
-5. **Decide:** "done" if the score is at least the **threshold, 0.571** (section 3 says where this number comes from).
+**In the proxy**, the event head turns the 2,048 numbers into a verdict:
 
-The policy's actions do not depend on the head at all: the head only adds its verdict to the reply.
+1. **Standardise:** subtract each number's mean over the training rows and divide by its spread, so that all 2,048 numbers
+   are on the same scale.
+2. **Score:** `score = w · x + b`, a weighted sum of the 2,048 numbers plus one constant. The higher, the surer the head is
+   that the skill is done; 0 means 50/50.
+3. **Decide:** "done" if the score is at least the **threshold** (section 3 says where it comes from).
+4. **Two in a row:** after two "done" verdicts in a row the skill is complete.
+
+Every server reads by the same rule: the backbone two thirds of the way up, averaged over the prompt's words, named
+`block12:prompt` for π0.5. The servers of other models use the [automatic tap](../../../taps/README.md), which finds all
+three by itself: the backbone (the stack of blocks as wide as the model's word table), the block two thirds
+up, and the prompt's words (the tokens that come from the word table; the padding is left out). On our π0.5 its numbers are
+the same as the hand-written tap's.
 
 ## 3. Why it is built this way
 
@@ -90,147 +94,175 @@ an expert's data meets states the expert never visited. So the head is trained o
 the slow and failed grasps, and the rules writer labels them for free: it knows from the gripper readings when a block was
 lifted and when it was set down. Trained this way, the false alarms at the grasp disappeared.
 
-One kind of run is left out, for training and testing alike: a run in which the policy picks up the blue block first. The
-history's lines follow the task's order (red first), so such a run cannot be labelled with the same lines.
-
 ### A logistic regression, not a multilayer perceptron
 
-The second kind of head was a **multilayer perceptron** (MLP: one hidden layer of 256 units). On the policy's own runs it
-was no better than the logistic regression: the problem had been the training data, not the size of the head. We kept the
+The second kind of head was a **multilayer perceptron** (one hidden layer of 256 units). On the policy's own runs it was no
+better than the logistic regression: the problem had been the training data, not the size of the head. We kept the
 logistic regression:
 
 - **A cleaner answer to the research question.** A linear read-out shows that the policy itself has organised the
-  information so that a straight line separates "done" from "not done" (Alain and Bengio's argument for linear probes). An
-  MLP could compute part of the answer itself, and we would not know whether the policy or the probe did the work.
-- **Less risk of overfitting.** The logistic regression has 2,049 numbers to learn (2,048 weights and a bias). The MLP has
-  about 525,000 (2,048 × 256 + 256 + 256 + 1). With 11,791 rows from only 129 runs, rows from one run are very similar to
-  each other, so the effective amount of data is small.
-- **A fit with one exact answer.** The logistic regression's loss has a single minimum. We find it with Newton's method in
-  a few iterations, without a random start, a learning rate or a number of epochs to choose. The same rows always give the
-  same head.
-- **A meaningful score.** The score is a logit, so a threshold has a clear meaning, and the threshold can be set from the
-  false-alarm rate (below).
-- **Almost no cost.** At run time the head is one dot product of 2,048 numbers.
+  information so that a straight line separates "done" from "not done". A perceptron could compute part of the answer
+  itself, and we would not know whether the policy or the probe did the work.
+- **Less risk of overfitting.** The logistic regression learns 2,049 numbers; the perceptron about 525,000
+  (2,048 × 256 + 256 + 256 + 1). Rows from one run are very similar, so the real amount of data is small.
+- **A fit with one exact answer.** The loss has a single minimum, found with Newton's method in a few iterations, without a
+  random start, a learning rate or a number of epochs to choose. The same rows always give the same head.
+- **A meaningful score and almost no cost.** The score is a logit, so a threshold has a clear meaning; at run time the head
+  is one dot product of 2,048 numbers.
 
 ### An event, not the progress
 
 The progress probe on π0.5 (section 1) reads out how much of the task is left. We read out an event instead, because the
-writer needs a yes-or-no decision at one moment: write the line now. A progress estimate would still need a threshold to
-turn it into that decision, and "how much is left" depends on how the episode goes (a failed grasp makes the rest take
-longer), while "the skill is done" is one clear moment that matches the policy's training labels. Both are linear read-outs
-of the same kind of averaged activations. A progress read-out could still help to spot a robot that is stuck; we have not
-tried it.
+writer needs a yes-or-no decision at one moment. A progress estimate would still need a threshold to turn it into that
+decision, and "how much is left" depends on how the episode goes, while "the skill is done" is one clear moment that
+matches the policy's training labels.
 
-### Block 12, the text tokens, the threshold and two verdicts in a row
+### Block 12 and the text tokens, the threshold, two verdicts in a row
 
-- **Block 12 and the text-token average** were the best of the settings compared with cross-validation on the policy's own
-  runs (7 choices of layer and pooling, each trained on the runs alone or on the runs plus the demonstrations).
-- **The threshold, 0.571.** A false line is worse than a late one: once written, it stays in the history for the rest of the
-  episode and misleads the policy. So the threshold is the score that only **1 % of the "not done" moments** reach in the
-  cross-validation.
-- **Two "done" verdicts in a row.** Single false alarms are rare, but they happen. Asking for two in a row removes almost all
-  of them, at the price of one call of delay, and of missing events that last only one call (a block dropped right after the
-  lift).
+**Which block, and which average.** The head can read the policy after any of its 18 blocks, and it can sum up the block's
+output in different ways: the vector of the prompt's **last token**, the average over the **picture tokens**, or the average
+over the prompt's **text tokens**. Seven choices were compared on 29 runs of the history policy, with 5-fold
+cross-validation: each run is scored by a head trained on the other runs. The runs held 402 "done" rows and 2,223 "not done"
+rows. The **AUROC** is the chance that a random "done" row scores higher than a random "not done" row (0.5 is guessing, 1 is
+perfect). "Caught" counts the "done" rows above the threshold that only 1 % of the "not done" rows reach. The last four
+columns play each head through the 29 runs as a writer, against the rules writer's 67 lines.
 
-## 4. How the head is trained, step by step
+| block | summary | AUROC | "done" rows caught | lines one call late | two or more calls late | missed | false |
+|---|---|---|---|---|---|---|---|
+| 6 | last token | 0.987 | 327 of 402 | 53 | 8 | 6 | 1 |
+| 9 | last token | 0.989 | 339 of 402 | 56 | 7 | 4 | 1 |
+| 12 | last token | 0.988 | 308 of 402 | 47 | 13 | 7 | 1 |
+| 15 | last token | 0.987 | 302 of 402 | 43 | 13 | 11 | 0 |
+| 17 | last token | 0.987 | 313 of 402 | 50 | 7 | 10 | 1 |
+| 12 | picture tokens | 0.973 | 233 of 402 | 34 | 18 | 15 | 2 |
+| **12** | **text tokens** | **0.991** | **351 of 402** | **57** | **5** | **4** | **0** |
 
-![How the head's training rows are labelled](head_rows.svg)
+(With block 12 and the text tokens, one more line came in the same call as the rules writer's.)
 
-`training/fit_event_head.py` does the whole fit. It reads one `.npz` file per recorded run of the policy:
+- **The block made little difference.** With the last token, every block from 6 to 17 reached an AUROC of 0.987 to 0.989.
+- **The summary made more.** At block 12 the average over the text tokens caught the most "done" rows with the fewest false
+  alarms (8 of the 2,223 "not done" rows, against 26 with the last token and 41 with the picture tokens), and it was the
+  only setting that wrote no early and no false line.
+- **The demonstrations did not help.** Trained on the runs plus the 200 demonstrations, every setting scored a little lower
+  (AUROC 0.963 to 0.989).
+- **Not tried:** the text-token average at the other blocks.
+- **Chosen after looking.** Block 12 with the text-token average was picked from these results, on only 29 runs. So the
+  head was then fixed and tested once on 49 fresh runs: it wrote no early and no false line there.
 
-| array | content |
-|---|---|
-| `exterior`, `wrist` | the two camera pictures at every control step |
-| `instruction` | the episode's instruction |
-| `reference`, or `rows` | the number of finished skills at every step; or the gripper readings, from which the task's rules writer computes it |
+**The threshold.** A false completion is worse than a late one: once written, it stays for the rest of the episode and
+misleads the policy. So the threshold is the score that only **1 % of the "not done" moments** reach in the
+cross-validation (0.571 for the history policy's head).
 
-1. **The training rows** (`vla_memory/writers/head/rows.py`). Every 4th frame of a run becomes one or two rows, each a
-   picture pair shown with a prompt:
-   - **label 0** ("not done"): the frame, with the history that is correct at that moment. The current skill is still in
-     progress.
-   - **label 1** ("done, line missing"): each of the first 24 frames after a skill was finished, shown with the *old*
-     history, which still lacks the new line. That is exactly what the head must notice at run time.
+**Two "done" verdicts in a row.** Single false alarms are rare, but they happen. Asking for two in a row removes almost all
+of them, at the price of one call of delay, and of missing events that last only one call (a block dropped right after the
+lift).
 
-   The same frame can appear twice: with the new history as label 0, with the old history as label 1. So the head cannot
-   decide from the picture alone; it has to compare the picture with the history in the prompt. No rows are made for the
-   last skill, because its completion writes no line (as in the policy's training data).
-2. **The features** (`vla_memory/writers/head/features.py`, in the openpi environment, on a GPU). The frozen policy, loaded
-   exactly as the server loads it, computes the 2,048 numbers of every row (section 2). They are saved (`--features`), so
-   that a second fit can skip this step.
-3. **The fit** (`vla_memory/writers/head/fit.py`, on the CPU):
-   - the rows are standardised;
+## 4. How the head is trained
+
+![How the training examples are recorded](head_rows.svg)
+
+`training/fit_event_head.py` fits the head on the proxy's recordings (`--record-head`), for any policy whose server hands
+out its state.
+
+1. **The training examples.** Each one is the policy's state for one input, with a label:
+   - **label 0** ("not done"): every policy call, with the input the policy got: the history with a line for each finished
+     skill, the current skill as the prompt, or the picture of the last key moment (none before the first).
+   - **label 1** ("done, not shown yet"): at the 3 calls after the teacher counted a skill as done, the proxy asks the
+     policy once more, with the same pictures but the input of the call before the switch: the history still lacks the new
+     line, the prompt still names the finished skill, or the memory picture is still the previous one. The answer to this
+     extra question goes nowhere; the robot acts on the real call only.
+
+   The same pictures appear twice: with the new input as label 0, with the old one as label 1. So the head cannot decide
+   from the pictures alone; it has to compare them with what the method shows. Once the input shows every skill the head
+   can complete, the calls are left out: the last skill writes no line.
+2. **The fit** (`vla_memory/writers/head/fit.py`, on the CPU):
    - **balanced class weights**: there are many more label-0 rows than label-1 rows, so each class gets the same total
      weight; otherwise the head could score well by always saying "not done";
-   - an **L2 penalty** keeps the weights small, which prevents overfitting. Its strength is chosen from 1e-4, 1e-3, 1e-2 and
-     1e-1 by **5-fold cross-validation over runs**: the runs are split into 5 groups, each group is predicted by a head
-     trained on the other 4, and the strength with the best average **AUROC** wins (1e-3 for the reference head). The AUROC
-     is the chance that a random "done" moment gets a higher score than a random "not done" moment: 0.5 is guessing, 1 is
-     perfect. Whole runs stay together in one group, because frames of the same run are so similar that splitting them
-     would make the test far too easy;
-   - the **threshold** is taken from these out-of-fold scores, the scores of heads that did not see the run (section 3);
-   - the final head is fitted on all rows with the chosen strength.
-4. **The head files** (`vla_memory/writers/head/file.py`): `head.npz` holds the weights, the bias, the mean and spread of
-   the features, the threshold, the number of verdicts in a row, the layer and the pooling; `head.json` notes how it was
-   fitted; `head.sha256` holds checksums, checked whenever the head is loaded.
+   - an **L2 penalty** keeps the weights small. Its strength is chosen from 1e-4, 1e-3, 1e-2 and 1e-1 by **5-fold
+     cross-validation over runs**: each fifth of the runs is predicted by a head trained on the other four, and the strength
+     with the best average AUROC wins. Whole runs stay together, because frames of the same run are so similar that
+     splitting them would make the test far too easy;
+   - the **threshold** comes from these out-of-fold scores, the scores of heads that did not see the run;
+   - the final head is fitted on all rows; when the server hands out several summaries, this is done for each one and the
+     best is kept.
+3. **The head files** (`vla_memory/writers/head/file.py`): `head.npz` holds the weights, the bias, the mean and spread of
+   the numbers, the threshold, the number of verdicts in a row and the name of the summary the head reads (for example
+   `block12:prompt`); `head.json` notes how it was fitted; `head.sha256` holds checksums, checked whenever the head is
+   loaded.
+
+For openpi's π0.5 there is a second way in: the pictures of recorded episodes (`--episodes`; the rows:
+`vla_memory/writers/head/rows.py`). Every 4th frame becomes a label-0 row, and those among the first 24 frames after a
+finished skill also a label-1 row, built after the fact; the policy, loaded as `openpi_server.py` serves it, computes each row's
+numbers on a GPU. Our first heads were fitted that way; the script's description lists the arrays an episode file needs.
 
 ## 5. The code at run time
 
-**The server** (`vla_memory/writers/head/server.py`, in the openpi environment):
+**The policy server** hands out the state with every reply (`vla_memory/taps/reply.py`):
 
-1. It loads the policy with openpi as usual, and the head from its folder (checksums checked).
-2. `HeadPolicy` wraps the policy's input transform in a function that only keeps a copy of the transformed observation, so
-   the policy runs exactly as without the head.
-3. After every call it computes the head's features from that copy (`features.LayerFeature`: blocks 0 to 12 of the
-   backbone, one at a time, with the checkpoint's weights), scores them and adds
-   `reply["event_head"] = {"score", "done", "threshold", "ms"}` to the reply.
+```
+reply["policy_state"] = {"names": ["block12:prompt"], "values": (1, 2048) float16}
+```
 
-**The writer** (`vla_memory/writers/head/writer.py`, `HeadWriter`):
+- openpi's π0.5 (`integrations/openpi/openpi_server.py`): `openpi_tap.py` taps block 12. For a JAX policy,
+  `sample_actions` becomes a copy of openpi's whose pass over the pictures and the prompt also returns the block's average
+  (the built-in memory's `pooling.py`); for a PyTorch policy a forward hook on block 12 does the same.
+- any LeRobot policy (`integrations/lerobot/lerobot_server.py`): the automatic tap, with the same rule.
+- any other PyTorch policy: its own server with the automatic tap added:
+
+  ```python
+  tap = AutoTap(model)                   # once, after loading (vla_memory/taps/auto.py)
+  tap.start_call()                       # before each call
+  values = tap.read()                    # after each call
+  reply["policy_state"] = state_entry(tap.names, values)
+  ```
+
+**The writer** (`vla_memory/writers/head/writer.py`, `HeadWriter`, in the proxy):
 
 - `start_episode`: the plan is the task's order of skills (of the episode's objects, if the environment names them), the
   position starts at the first skill, the "done" counter at 0.
-- `after_call`: it reads the verdict. A "done" raises the counter, a "not done" sets it back to 0. When the counter reaches
-  `--consecutive` (default 2), the current skill's line is written, the position moves on and the counter starts again.
-  Without a verdict in the reply, it stops with an error that says how to serve the policy.
-- `before_call`: a line written after the previous call goes into this call's prompt. Because the head decides *after* a
-  call, its decision reaches the policy one call later than with the writers that decide before the call.
-- At most `max_lines` lines are written (the task file's `history.max_lines`, 3 here): the last skill has no line.
+- `after_call`: it finds the summary its head was fitted on in the reply, by its name, scores it and reads the verdict. A
+  "done" raises the counter, a "not done" sets it back to 0. When the counter reaches `--consecutive` (default: the head's,
+  2), the current skill is complete and the counter starts again. Without that summary in the reply it stops with an error
+  that says what the server hands out.
+- `before_call`: a skill completed after the previous call reaches the method at this call. Because the head decides
+  *after* a call, its decision reaches the policy one call later than with the writers that decide before the call.
+- At most `max_lines` skills are completed this way (the method's own limit, `--max-lines` or `--keyframe-max-events`,
+  else the task file's `history.max_lines`, 3 here): the last skill has no line.
 
-**Exact numbers and speed.** The GPU library (XLA) chooses its computing kernels per batch size and per process, and
-different kernels give slightly different rounding. To get exactly the numbers the head was trained on, the server scores
-every call as 8 copies of itself (the batch size of the fit) with the same compiled kernels (a copy of the fit's
-compilation cache, `--jax-cache`). Then the features are identical bit for bit. The price: the head pass adds about half a
-second per call. With `--head-batch 1` it adds only about 100 ms, but the scores are slightly off (a mean 0.08), which changed
-none of the verdicts we checked. Reading block 12 from the policy's own forward pass, instead of computing blocks 0 to 12 a
-second time, would make the head almost free; that is not built.
+**The recording** (`vla_memory/writers/head/record.py`, in the proxy with `--record-head DIR`): at every call it takes the
+policy's state from the reply and the teacher's count of finished skills, and after a finished skill it asks the extra
+questions (section 4). When an episode ends it writes one file: the summaries of every row, the rows (the step, the
+finished skills the input showed, the label), the summaries' names, and the episode's instruction, plan, writer and method.
+
+The head scores the numbers of the policy's own pass, exactly the kind of numbers the recording keeps, so it is fitted on
+the very numbers it scores.
 
 ## 6. Does it depend on the policy? Yes, completely
 
-- **The features are the policy's own.** Another model, another fine-tune, even another checkpoint of the same fine-tune
-  has a different inner representation. Our head was fitted on checkpoint 28000 of the history policy and belongs to it.
+- **The numbers are the policy's own.** Another model, another fine-tune, even another checkpoint of the same fine-tune
+  has a different inner representation. Each of our heads belongs to one checkpoint: 28000 of the history policy, 20000 of
+  the sub-goal policy, 29000 of the keyframe policy.
 - **The training data are the policy's own runs.** Section 3 shows why: a head trained on someone else's behaviour (the
   scripted demonstrations) fails on the policy's.
-- **The prompt is part of the input.** The rows show the history policy's prompts; with another method the policy sees
-  other prompts, and the head would have to be fitted for them.
-- **The server must reach inside the model.** As shipped it reads the Gemma backbone of an openpi π0.5 policy.
+- **The method is part of the input.** The examples show the policy what its method shows it. A head fitted for one method
+  does not fit another.
+- **The server must reach inside the model.** openpi's PyTorch port of π0.5 gives slightly different numbers than the JAX
+  policy (about 3 % apart), so a head fitted on one is not exact on the other: fit the head on the policy that will run.
 
-To use the idea with another VLA:
-
-1. record runs of that policy and label them (with the rules writer, a tracker, or by hand);
-2. pick a layer and a pooling of that model and extract the features for the rows;
-3. fit and check the head on held-out runs: the AUROC, the false-alarm rate at the threshold, and the line timing as a
-   writer;
-4. serve the policy with the head's verdict in every reply, as `server.py` does for π0.5.
+To use it with another VLA: make its server hand out `reply["policy_state"]` (the LeRobot server does it for LeRobot's
+policies, the automatic tap for any PyTorch policy; a JAX model has to return the numbers itself), record runs with a
+teacher and `--record-head`, fit, check the cross-validation's AUROC, and run the proxy with `--writer head --head-dir`.
 
 ## 7. Limitations
 
-- **Speed:** the exact head pass makes a call about four times slower (716 instead of 170 ms), longer than an 8-step chunk
-  of actions lasts at 15 Hz (533 ms). A real robot would need the faster, slightly inexact mode, asynchronous inference, or
-  the tap inside the policy's own forward pass.
-- **It copies its teacher.** It learned the rules writer's labels; where the rules writer is wrong, the head learns the
-  mistake. Where the rules writer and the tracker disagree, for example a cube let go a little too high (the rules writer
-  calls it a drop, the tracker a placement), the head has to side with one of them.
-- **Narrow testing:** one policy, one instruction, one camera setup, in simulation.
+- **It copies its teacher.** Where the teacher is wrong, the head learns the mistake. Where the rules writer and the
+  simulator disagree, for example a cube let go a little too high (the rules writer calls it a drop, the simulator a
+  placement), the head has to side with one of them.
+- **It does not check which block is held.** If the policy grasps the wrong block, the head still completes the skill.
 - **Rare events:** drops right after a lift, unusual movements after a release, and events shorter than two calls are where
   it misses.
 - **One call of delay**, because it decides after the call.
 - **No "task finished":** the last skill has no line, as in the policy's training data.
+- **Narrow testing:** three π0.5 policies of one task, one instruction, one camera setup, in simulation; other VLAs were
+  checked for the mechanics only.
+- **Speed is not a limit:** a call takes as long as without the head, and the head itself takes well under a millisecond.

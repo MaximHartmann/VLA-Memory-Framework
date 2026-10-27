@@ -19,34 +19,29 @@ pick up the red block. memory: release at step 1, up 2 cm
 
 ![One policy call with the memory policy](detailed/memory_policy_call.svg)
 
-**Why this kind of memory?** The sub-goal policy is told which skill to do, but not how to do it in this exact picture. The
-store can show how a similar picture was handled before: by a demonstration, by the policy itself, or by a scripted expert
-that took over from the policy. The hope was that such a hint helps with the failures that are left, mostly grasps that miss
-or slip. The memory lives outside the weights, so it could grow without training again, as long as its moments look like the
-ones the policy was trained on. The idea follows retrieval-augmented policies such as RICL (Sridhar et al., 2025, arXiv
-2508.02062), which put retrieved experience into the policy's own input.
-
-**The policy is trained to read hints.** Every training frame gets the nearest stored moment of *another* episode. So the
-policy learns how far the hint of a similar but different scene can be trusted, and it stays in control. One frame in ten gets
-no hint (an all-zero picture and the bare skill prompt), so a call without a hint is something the policy has seen too.
-
-**What the sentence says.** First how the hand moves from now to the end of the next 8 actions, in whole centimetres, largest
-movement first (up or down, left or right, forward or back). Then what the gripper does: "release at step k", "close at step
-k" or "gripper stays closed". A moment with no words at all reads "hold still".
-
-**How the moment is found.** It is the single most similar moment by the colour fingerprint of the raw wrist picture, among
-the moments of the same skill whose gripper was open (or closed) like the current one. If the fingers have closed on
-nothing, which means the grasp missed, only moments that open the gripper again are offered.
+- **Why this kind of memory?** The sub-goal policy is told which skill to do, but not how to do it in this exact picture. The
+  store can show how a similar picture was handled before: by a demonstration, by the policy itself, or by a scripted expert
+  that took over from the policy. The hope was that such a hint helps with the failures that are left, mostly grasps that
+  miss or slip. And a memory outside the weights could grow without new training. The idea follows retrieval-augmented
+  policies such as RICL (Sridhar et al., 2025, arXiv 2508.02062), which put retrieved experience into the policy's own input.
+- **The policy is trained to read hints.** Every training frame gets the nearest stored moment of *another* episode, so the
+  policy learns how far the hint of a similar but different scene can be trusted, and it stays in control. One frame in ten
+  gets no hint (an all-zero picture and the bare skill prompt), so a call without a hint is something the policy has seen
+  too.
+- **What the sentence says.** First how the hand moves from now to the end of the next 8 actions, in whole centimetres,
+  largest movement first (up or down, left or right, forward or back). Then what the gripper does: "release at step k", "close
+  at step k" or "gripper stays closed". A moment with no words at all reads "hold still".
+- **How the moment is found.** It is the single most similar moment by the colour fingerprint of the raw wrist picture (a
+  short list of numbers that describes the picture's colours and where the coloured objects are), among the moments of the
+  same skill whose gripper was open (or closed) like the current one. If the fingers have closed on nothing, which means the
+  grasp missed, only moments that open the gripper again are offered.
 
 **What it cannot do:**
 
-- **It did not make the policy better.** With the memory the policy completed 98 of 100 episodes, without it 96, and a control
-  trained on the same data without any memory 96. These differences are within chance.
+- **It did not make the policy measurably better** (see "Our findings").
 - **The policy has to be trained for it.** A new policy must learn to read the hints (about 26 hours of training per policy on
-  one GPU), and the store has to exist before that. The policy learned from hints of this store's kind. Whether a store of
-  other moments would work without new training was not tested.
-- **A wrong hint costs a little.** On 20 development episodes, a random moment of another skill instead of the right one cost
-  2 completed episodes (20 became 18) at the last checkpoint.
+  one GPU), and the store has to exist before that. Whether a store of other moments would work without new training was not
+  tested.
 - **The key is simple and hand-made.** It describes colours and where the coloured objects are in the wrist picture. It works
   for clearly coloured objects, and the picture must be the same kind of raw wrist frame the store was built from.
 - **The store is only read during a run.** Nothing is added and nothing is forgotten while the robot works.
@@ -54,8 +49,7 @@ nothing, which means the grasp missed, only moments that open the gripper again 
 - **Part of it is tied to the reference robot.** The sentences are computed with the Franka arm's kinematics, and the
   gripper thresholds are those of the reference bench.
 
-A walkthrough of how it works: the reasoning, the code path, the store and the training data:
-[detailed/README.md](detailed/README.md).
+How it works in the code, how the store and the training data are made: [detailed/README.md](detailed/README.md).
 
 ## Prerequisites
 
@@ -94,12 +88,12 @@ A walkthrough of how it works: the reasoning, the code path, the store and the t
        --upstream-port <policy port> --with memory_policy --memory-store <store dir> [--memory-mode off|wrong]
    ```
 
-   `--memory-mode off` sends no hint at all (the bare skill prompt, no picture). `wrong` sends a random moment of another
-   skill. These two modes show whether the policy reads its memory at all. `--memory-seed` fixes the random choice and
-   `--memory-cache` sets how many decoded pictures stay in memory.
-
-Every line of the proxy's log holds `memory_mode` and, under `memory`, the hint of that call: the moment it came from
-(`entry`, `episode`, `step`, `source`), its `similarity`, the `rule` that allowed it, its `sentence` and the time in ms.
+   - `--memory-mode off` sends no hint at all (the bare skill prompt, no picture). `wrong` sends a random moment of another
+     skill. These two modes show whether the policy reads its memory at all.
+   - `--memory-seed` fixes the random choice of `wrong`, and `--memory-cache` sets how many decoded pictures stay in memory.
+   - With `--log FILE`, every line of the proxy's log holds `memory_mode` and, under `memory`, the hint of that call: the
+     moment it came from (`entry`, `episode`, `step`, `source`), its `similarity`, the `rule` that allowed it, its `sentence`
+     and the time in ms.
 
 ## Our findings
 

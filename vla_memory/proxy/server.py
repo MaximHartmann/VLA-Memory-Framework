@@ -1,6 +1,7 @@
 """The proxy's network frontend: the openpi serving protocol (msgpack over a websocket), because that is what openpi
 environment clients speak. One connection at a time is enough for an evaluation loop. Another frontend replaces this
-class and keeps the relay.
+class and keeps the relay. When it stops it closes the open connections itself, so that it stops even while an environment
+client is still connected.
 """
 from __future__ import annotations
 
@@ -23,15 +24,18 @@ class ProxyServer:
         self.host = host
         self.port = port
         self.metadata = metadata
+        self.stop = asyncio.Event()         # set: stop serving (cli.py sets it at SIGTERM and Ctrl-C)
 
     async def run(self):
-        """Serve until the process is stopped."""
+        """Serve until `stop` is set or the task is cancelled. Then accept no new connection, close the open ones (close code
+        1001, going away) and wait until their handlers end, so that nothing uses the relay any more."""
         import websockets.asyncio.server as server
         async with server.serve(self._handle_connection, self.host, self.port, compression=None, max_size=None,
-                                process_request=health_check) as websocket_server:
+                                process_request=health_check):
             log.info("proxy listening on %s:%s (writer %s, method %s)", self.host, self.port, self.proxy.writer.name,
                      self.proxy.method.name)
-            await websocket_server.serve_forever()
+            await self.stop.wait()
+            log.info("proxy stopping: closing the open connections")
 
     async def _handle_connection(self, websocket):
         """One client: send the metadata, then answer every observation with the proxy's reply."""

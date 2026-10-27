@@ -3,7 +3,7 @@
 ## The idea
 
 **Status: evaluated in two versions, neither worked. The code is not in the framework.** This page records what we tried and
-what the measurements showed, so that the attempt is not repeated.
+what the measurements showed, so that the attempt is not repeated without need.
 
 **The problem.** In our reference task the robot picks up a red block, puts it back, and then picks up the blue one. When red
 is back on the table the scene looks almost like the start, so a policy that sees only the current pictures cannot tell what is
@@ -14,35 +14,30 @@ its last frames?"), so we built it.
 **What we built.** A *frame window*: the last X policy calls at a spacing of Y seconds. Each past call is not kept as two
 pictures but as the summary the policy itself computes for it: the numbers of its language backbone after block 12, averaged
 over the prompt's words and over each camera's picture tokens, 6,144 numbers. A small module pools the X summaries into one
-vector by attention and adds it to the action expert's conditioning signal. Everything else is identical to the recurrent
-memory of the [built-in memory](../builtin_memory/README.md): the same summaries, the same data, the same entry point into the
-action expert, the same frozen backbone, the same training. So any difference in the result comes from the window against the
-recurrent state, and from nothing else.
+vector by attention (a learned weighting of the slots) and adds it to the action expert's conditioning signal. Everything
+else is identical to the recurrent memory of the [built-in memory](../builtin_memory/README.md): the same summaries, the same
+data, the same entry point into the action expert, the same frozen backbone, the same training. So any difference in the
+result comes from the window against the recurrent state, and from nothing else.
 
 ![The frame window next to the recurrent state](detailed/window_how.svg)
 
-**What happened.** Two versions, each trained for 10,000 steps and tested on 100 fresh seeds, completed 6 to 12 of 100 tasks,
-where the recurrent state completed 34 to 39 with the same data and steps. The window was used by the policy, but its attention
-never learned to pick the frames that matter, and when a second version did select somewhat and carried the task phase in its
-output, the action expert still did not act on it.
+**What happened.** Both versions completed far fewer tasks than the recurrent state with the same data and steps. The policy
+did use its window, but the attention never learned to pick the frames that matter. When a second version did select
+somewhat and carried the task phase in its output, the action expert still did not act on it.
 
 **What it cannot do:**
 
-- **It does not replace a recurrent state on this task.** 6 to 12 of 100 against 34 to 39.
-- **It does not find the decisive frame by itself.** In the first version the attention was almost flat, so the window acted as
-  a plain average of the last X frames, in which the moment that matters is one frame of 8 or 16.
+- **It does not replace a recurrent state on this task.**
+- **It does not find the decisive frame by itself.** In the first version the attention was almost flat, so the window acted
+  as a plain average of the last X frames, in which the moment that matters is one frame of 8 or 16.
 - **A longer or denser window does not help.** 8, 16 or 32 seconds of history, at 1 or 2 seconds apart, gave the same.
-- **It shifts where the arm goes down.** The gripper closed with no cube within 6 cm in 21 to 40 episodes, against 6 to 11 for
-  the recurrent memory.
-- **Selecting and encoding the phase were not enough.** The second version's attention moved away from flat and its phase head
-  learned the phase from the window (0.99 in training), yet the policy completed 6 tasks with the window and 6 without it.
-- **The reason is a hypothesis, not a measurement:** how the signal reaches the actions. The recurrent state is updated once per
-  call and trained through the whole episode, so its read-out stays consistent from call to call; the window's read-out is
-  recomputed at every call from whichever frames fall into its slots.
+- **Selecting and encoding the phase were not enough** in the second version (see "Our findings").
+- **The reason is a hypothesis, not a measurement:** how the signal reaches the actions. The recurrent state is updated once
+  per call and trained through the whole episode, so its read-out stays consistent from call to call. The window's read-out
+  is recomputed at every call from whichever frames fall into its slots.
 - **Its code is not in the framework**, so the results cannot be repeated from this repository.
 
-A walkthrough of the mechanism, both versions, why they went wrong and what we learned:
-[detailed/README.md](detailed/README.md).
+How both versions worked, and how to rebuild a window on the built-in memory's code: [detailed/README.md](detailed/README.md).
 
 ## Prerequisites
 
@@ -60,16 +55,18 @@ memory's integration is the base, because the window and the recurrent state dif
 - In `model.py` the window module replaces the GRU step (`memory_scan`); its read-out enters the action expert's conditioning
   at the same place.
 - The policy server keeps every call's summary of the episode with its call number, since the window is picked from them at
-  every call (a call every 8 control steps, 15 control steps a second). It resets at the episode markers as the built-in memory
-  does.
-- The proxy side is the built-in memory's: it forwards the episode markers, and `--writer off` leaves the instruction alone.
+  every call (a call every 8 control steps, 15 control steps a second). It resets at the episode markers as the built-in
+  memory does.
+- The proxy side is the built-in memory's: it forwards the episode markers, and `--writer off` leaves the instruction alone:
 
-```
-python -m vla_memory.proxy --writer off --task task.yaml --listen-port <port> --upstream-port <policy port>
-```
+  ```
+  python -m vla_memory.proxy --writer off --task task.yaml --listen-port <port> --upstream-port <policy port>
+  ```
 
-`--task` names the task file; for the reference task it can be left out. The test of whether a window is used is the window
-version of the reset test: empty it at every call and see whether the success falls.
+  `--task` names the task file; for the reference task it can be left out.
+
+The test of whether a window is used is the window version of the reset test: empty the window at every call and see
+whether the success falls.
 
 ## Our findings
 
@@ -103,8 +100,10 @@ intervention episodes. A window is "blank" when it is empty at every call:
   maximum), but gave the decisive frames only 1.6 times their equal share, regardless of the outcome. Its phase head
   learned the task phase from the pooled window (accuracy 0.99 in training). The policy completed 6 tasks with the
   window and 6 without it (nothing separates the two): the action expert did not use the signal.
-- **Both versions grasped at the wrong place more often** than the recurrent memory, and both lifted red more often than the
-  memoryless policy (37 to 61 of 100 against 31) without finishing more tasks. The policy call took the same time (about
-  175 ms).
-- **Memory written from outside the policy did not need any of this.** A writer chooses one moment and the policy reads it:
-  75 to 82 of 100 with the history and keyframe methods. Choosing the moment is what the window never learned.
+- **Both versions grasped at the wrong place more often** than the recurrent memory: the gripper closed with no cube within
+  6 cm in 21 to 40 episodes, against 6 to 11 for the recurrent memory. With the window blank this hardly happened, so the
+  window input shifted where the arm went down. Both versions lifted red more often than the memoryless policy (37 to 61 of
+  100 against 31) without finishing more tasks. The policy call took the same time (about 175 ms).
+- **Memory written from outside the policy did not need any of this.** A writer chooses one moment and the policy reads
+  it: 75 to 82 of 100 with the history and keyframe methods, whichever the writer. Choosing the moment is what the window
+  never learned, which fits UniMem's finding that keyframes chosen at events beat uniformly spaced frames.

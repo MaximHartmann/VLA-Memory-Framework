@@ -9,8 +9,9 @@ A method's prompt() is asked after the writer's before_call, so a writer that de
 decision in the same call; before_policy() may add keys to the observation (a picture) and returns fields for the proxy's
 log. Other memories plug in as extensions (proxy/extensions.py).
 
-    Method     the interface
-    METHODS    registered name -> class or import path; resolve_method(name) for --method
+    Method       the interface
+    most_shown   the most completed skills a method shows: its own limit, and never the last skill of the plan
+    METHODS      registered name -> class or import path; resolve_method(name) for --method
 """
 from __future__ import annotations
 
@@ -62,6 +63,17 @@ class Method:
 
     def close(self) -> None:
         """The proxy stops."""
+
+
+def most_shown(limit: int | None, writer) -> int | None:
+    """The most completed skills a method shows: `limit` (its max_lines or max_events; None: no limit of its own), and never
+    the last skill of the writer's plan, which has no line in the policy's training data (the event-head writer completes no
+    more). None: no limit at all."""
+    plan = getattr(writer, "plan", None)      # a writer without a plan: only the method's own limit
+    if plan is None:
+        return limit
+    most = max(len(plan) - 1, 0)
+    return most if limit is None else min(limit, most)
 
 
 def resolve_method(spec):

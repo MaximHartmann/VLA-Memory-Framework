@@ -15,7 +15,7 @@ from __future__ import annotations
 import zlib
 from typing import Sequence
 
-WINDOW = 16          # the keyframe is drawn from the 16 frames after the event's boundary, the boundary itself included
+WINDOW = 16          # the keyframe is drawn from the boundary and the 16 frames after it (17 frames)
 
 
 def history_counts(prompts: Sequence[str], instruction: str, history, plan: Sequence[str] | None = None) -> list[int]:

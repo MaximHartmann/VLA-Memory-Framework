@@ -7,6 +7,8 @@ The top level holds what every memory method shares; each method is a subpackage
   vlm.VLMBackend             a language or vision-language model behind an OpenAI-compatible chat API, or your own
   transport.PolicyTransport  the connection to the VLA policy server (openpi websocket protocol, or your own)
   memory.MemoryStore         the long-term memory interface: what from the past resembles the current situation
+  taps                       state taps: one layer's state of a policy, read during its own forward pass (PyTorch hooks,
+                             JAX hand-over; docs/taps/README.md)
   env_keys.ControlKeys       the environment's side: the memory/ control keys of every policy call, built from a simulator's
                              or robot's raw signals
   vlm.make_vlm, transport.make_transport   another VLM backend or VLA transport by name: a registered name, an installed

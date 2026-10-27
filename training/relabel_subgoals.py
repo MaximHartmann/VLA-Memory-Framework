@@ -55,7 +55,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--src", required=True, help="existing LeRobot dataset root")
     parser.add_argument("--dst", required=True, help="new dataset root to create")
-    parser.add_argument("--raw-dir", default="data/demos_optb_full")
+    parser.add_argument("--raw-dir", required=True, help="the recorded demonstrations (episode_*.npz)")
     parser.add_argument("--start", type=int, default=0,
                         help="index of the first npz backing this split (val starts at 200)")
     parser.add_argument("--task", default=None, help="task YAML/JSON (default: the packaged red_blue_blocks task)")

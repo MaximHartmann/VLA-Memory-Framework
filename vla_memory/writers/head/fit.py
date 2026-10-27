@@ -135,9 +135,10 @@ def choose_l2(X, y, groups, l2_grid=L2_GRID, folds: int = FOLDS) -> tuple[int, l
     return best, table
 
 
-def fit_head(X, y, groups, l2_grid=L2_GRID, folds: int = FOLDS, fpr: float = FPR, consecutive: int = 2, layer: int = 12,
-             pool: str = "text") -> tuple[EventHead, dict]:
-    """Fit the head on the rows X (n, d), labels y and the episode of every row; returns the head and the report."""
+def fit_head(X, y, groups, l2_grid=L2_GRID, folds: int = FOLDS, fpr: float = FPR, consecutive: int = 2,
+             state: str = "block12:prompt") -> tuple[EventHead, dict]:
+    """Fit the head on the rows X (n, d), labels y and the episode of every row; state: the name of the summary of the
+    policy's state that X holds. Returns the head and the report."""
     y = np.asarray(y, int)
     best, table = choose_l2(X, y, groups, l2_grid, folds)
     out_of_fold = table[best]["oof"]
@@ -145,7 +146,7 @@ def fit_head(X, y, groups, l2_grid=L2_GRID, folds: int = FOLDS, fpr: float = FPR
     mean, std = statistics(X)
     w, b = fit_logistic(zscore(X, mean, std), y, l2_grid[best])
     head = EventHead(w=w.astype(np.float32), b=np.array([b], np.float32), mean=mean, std=std, threshold=threshold,
-                     consecutive=consecutive, layer=layer, pool=pool, l2=float(l2_grid[best]))
+                     consecutive=consecutive, state=state, l2=float(l2_grid[best]))
     report = {"l2": float(l2_grid[best]), "threshold": threshold, "N": consecutive, "fpr_max": fpr,
               "inner_cv": [{key: value for key, value in row.items() if key != "oof"} for row in table],
               "threshold_oof": {"negatives": int(np.sum(y == 0)), "at_or_above": int(np.sum(out_of_fold[y == 0] >= threshold)),

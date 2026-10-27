@@ -1,9 +1,11 @@
-"""The event head's file format: one directory per trained head, written by the fit and read by the policy server.
+"""The event head's file format: one directory per trained head, written by the fit and read by the head writer.
 
     head.npz      w (d,) float32: the weights; b (1,) float32: the bias; mean, std (d,) float32: the feature statistics of
-                  the training rows; threshold (float64); N (int64): the consecutive "done" calls that write a line; layer
-                  (int64): the block after which the policy's residual stream is read, counted from 0; pool (str): the
-                  tokens it is averaged over ("text": the prompt's valid text tokens); l2 (float64): the penalty of the fit
+                  the training rows; threshold (float64); N (int64): the consecutive "done" calls that write a line; state
+                  (str): the name of the summary of the policy's state the head reads (reply["policy_state"],
+                  vla_memory/taps/reply.py), e.g. "block12:prompt"; l2 (float64): the penalty of the fit. Older heads
+                  name it "layer<block>:text" (read as "block<block>:prompt") or have layer (int64) and pool (str)
+                  instead.
     head.json     a free description: the feature, the training episodes, the cross-validation table, when it was saved
     head.sha256   the SHA-256 of head.npz and head.json, one "<digest>  <name>" line each, checked when the head is loaded
 
@@ -19,6 +21,7 @@ import pathlib
 import numpy as np
 
 WEIGHTS = "head.npz"
+OLD_POOLS = {"text": "prompt", "ext": "exterior", "wrist": "wrist"}     # older heads' pool names
 DESCRIPTION = "head.json"
 DIGESTS = "head.sha256"
 
@@ -33,8 +36,7 @@ class EventHead:
     std: np.ndarray               # (d,) float32
     threshold: float
     consecutive: int = 2          # saved as N
-    layer: int = 12
-    pool: str = "text"
+    state: str = "block12:prompt"   # the summary of the policy's state it reads
     l2: float = 0.0
     meta: dict = dataclasses.field(default_factory=dict)
 
@@ -51,6 +53,14 @@ class EventHead:
         """The verdict of one call: its score, whether it says done, and the threshold."""
         score = self.score(feature)
         return {"score": score, "done": bool(score >= self.threshold), "threshold": float(self.threshold)}
+
+
+def state_name(name: str) -> str:
+    """The current name of a summary: an older head's "layer<block>:<pool>" becomes "block<block>:<kind>"."""
+    layer, _, pool = name.partition(":")
+    if layer.startswith("layer") and layer[5:].isdigit() and pool in OLD_POOLS:
+        return f"block{layer[5:]}:{OLD_POOLS[pool]}"
+    return name
 
 
 def sha256(path: pathlib.Path) -> str:
@@ -85,14 +95,15 @@ def load_head(directory, verify: bool = True) -> EventHead:
     directory = pathlib.Path(directory)
     digests = check_digests(directory) if verify else {}
     arrays = np.load(directory / WEIGHTS)
+    state = state_name(str(arrays["state"]) if "state" in arrays.files else f"layer{int(arrays['layer'])}:{arrays['pool']}")
     meta = {}
     if (directory / DESCRIPTION).exists():
         meta = json.loads((directory / DESCRIPTION).read_text())
     meta["sha256"] = digests
     return EventHead(w=arrays["w"].astype(np.float32), b=arrays["b"].astype(np.float32).reshape(1),
                      mean=arrays["mean"].astype(np.float32), std=arrays["std"].astype(np.float32),
-                     threshold=float(arrays["threshold"]), consecutive=int(arrays["N"]), layer=int(arrays["layer"]),
-                     pool=str(arrays["pool"]), l2=float(arrays["l2"]) if "l2" in arrays.files else 0.0, meta=meta)
+                     threshold=float(arrays["threshold"]), consecutive=int(arrays["N"]), state=state,
+                     l2=float(arrays["l2"]) if "l2" in arrays.files else 0.0, meta=meta)
 
 
 def save_head(directory, head: EventHead, description: dict) -> dict:
@@ -103,7 +114,7 @@ def save_head(directory, head: EventHead, description: dict) -> dict:
     directory.mkdir(parents=True, exist_ok=True)
     np.savez(directory / WEIGHTS, w=head.w.astype(np.float32), b=head.b.astype(np.float32).reshape(1),
              mean=head.mean.astype(np.float32), std=head.std.astype(np.float32), threshold=np.float64(head.threshold),
-             N=np.int64(head.consecutive), l2=np.float64(head.l2), layer=np.int64(head.layer), pool=np.array(head.pool))
+             N=np.int64(head.consecutive), l2=np.float64(head.l2), state=np.array(head.state))
     (directory / DESCRIPTION).write_text(json.dumps(description, indent=1) + "\n")
     digests = {name: sha256(directory / name) for name in (WEIGHTS, DESCRIPTION)}
     (directory / DIGESTS).write_text("".join(f"{digest}  {name}\n" for name, digest in digests.items()))

@@ -21,6 +21,9 @@ The environment sends its ordinary observation with the FULL instruction as `pro
     6. the extensions' on_reply, then writer.after_call: a writer that decides from the policy's reply; its decision shows
        from the next call on
     7. the reply goes back with a `planner` info dict; one JSON record per call goes to the log
+With a recorder (--record-head, writers/head/record.py) the policy's state in every reply is kept for fitting an event head,
+together with the writer's count of completed skills; after a completed skill the recorder asks the policy once more with
+the input of the call before.
 
 Neither the environment nor the policy server needs to know about the writer or the method. The command line is in
 cli.py:  python -m vla_memory.proxy --writer rules --method history --listen-port <port> --upstream-port <policy port>
@@ -62,7 +65,7 @@ class Relay:
 
     def __init__(self, transport: PolicyTransport, writer, method, log_path=None,
                  image_keys=("observation/image", "observation/wrist_image"), task: TaskSpec | None = None,
-                 extensions: Sequence[Extension] = (), memory_reset: str = "episode"):
+                 extensions: Sequence[Extension] = (), memory_reset: str = "episode", recorder=None):
         if memory_reset not in MEMORY_RESETS:
             raise ValueError(f"memory_reset {memory_reset!r}: one of {MEMORY_RESETS}")
         self.transport = transport
@@ -72,6 +75,7 @@ class Relay:
         self.task = task if task is not None else getattr(writer, "task", None)
         self.extensions = list(extensions)
         self.memory_reset = memory_reset
+        self.recorder = recorder           # keeps the policy's state for fitting an event head (writers/head/record.py)
         self.episode = None
         self.episode_count = 0
         self._log_file = open(log_path, "a") if log_path else None
@@ -87,15 +91,21 @@ class Relay:
         """Relay one policy call: decide the prompt, forward the observation, return the reply with the `planner` info."""
         started = time.perf_counter()
         control_keys, observation = split_control_keys(observation)
+        environment_keys = set(observation)
         instruction = text_of(observation.get("prompt", ""))
         info = {"mode": self.writer.name, "queried": False, "advanced": False, "vlm_ms": 0.0}
         if self._is_new_episode(control_keys):
             self._begin_episode(control_keys, instruction, info)
         call = Call(instruction, control_keys, observation, self.image_keys)
         info.update(self.writer.before_call(call, self.extensions))
+        shown = len(self.writer.completed())
         prompt = self._decide_prompt(instruction, observation, control_keys, info)
+        inputs = {key: value for key, value in observation.items() if key == "prompt" or key not in environment_keys}
         observation.update(self.episode_markers(control_keys))
         reply = self._forward(observation, info)
+        if self.recorder is not None:
+            info["recorded"] = self.recorder.on_call(observation, inputs, reply, shown, control_keys.get("step"),
+                                                     self.transport.infer)
         self._reply_hooks(observation, control_keys, reply, prompt, info)
         info.update(self.writer.after_call(reply))
         info["total_ms"] = 1000 * (time.perf_counter() - started)
@@ -150,9 +160,17 @@ class Relay:
         if record is not None:
             info.update(plan=record["plan"], plan_source=record["source"], plan_ms=record.get("ms"))
             log.info("episode %s plan (%s): %s", self.episode, record["source"], record["plan"])
+        if self.recorder is not None:
+            self.recorder.start_episode(self.episode, {"instruction": instruction, "plan": list(self.writer.plan),
+                                                       "writer": self.writer.name, "method": self.method.name})
 
     def _end_episode(self):
-        """The extensions take the finished episode; their records go to the writer's log."""
+        """The extensions take the finished episode; their records go to the writer's log. The recorder writes it. Before
+        the first episode there is nothing to end."""
+        if self.episode is None:
+            return
+        if self.recorder is not None:
+            self.recorder.end_episode()
         for extension in self.extensions:
             record = extension.end_episode(self.writer.monitor)
             if record is not None:

@@ -3,7 +3,8 @@
     "Pick up the red block, place it back, and then grasp the blue block. History: picked up the red block."
 
 The lines are the completed skills of the writer, whichever it is. An oracle prompt that is not one of the task's skills is
-forwarded as it is. Two options serve timing experiments:
+forwarded as it is. The last skill of the episode's plan never gets a line, as in the training data, also in a plan shorter
+than max_lines + 1 (an episode with fewer objects). Two options serve timing experiments:
 
     --max-lines N      show at most N lines (default: the task's history.max_lines, the longest history in training)
     --delay-calls N    show the history of N policy calls ago
@@ -12,13 +13,13 @@ from __future__ import annotations
 
 from collections import deque
 
-from ..base import Method
+from ..base import Method, most_shown
 from .prompt import HistoryPrompt
 
 
 class HistoryMethod(Method):
-    """The instruction with the writer's completed skills appended (prompt.HistoryPrompt): at most max_lines of them, and
-    with delay_calls the history of that many calls ago."""
+    """The instruction with the writer's completed skills appended (prompt.HistoryPrompt): at most max_lines of them, never
+    the plan's last skill, and with delay_calls the history of that many calls ago."""
 
     name = "history"
 
@@ -51,15 +52,17 @@ class HistoryMethod(Method):
         """The instruction with the writer's completed skills; an environment prompt that is not a skill is forwarded."""
         if writer.passthrough is not None:
             return writer.passthrough      # the environment already sent a full prompt
-        return self.render(instruction, writer.completed())
+        return self.render(instruction, writer.completed(), most_shown(self.max_lines, writer))
 
-    def render(self, instruction: str, completed_skills) -> str:
-        """Instruction plus history, at most max_lines lines (the longest history the policy was trained on)."""
+    def render(self, instruction: str, completed_skills, lines: int | None = None) -> str:
+        """Instruction plus history, at most `lines` lines (default max_lines, the longest history the policy was trained on;
+        prompt() also leaves out the plan's last skill)."""
         completed = list(completed_skills)
         if self.delay_calls:
             completed = self._delayed(completed)
-        if self.max_lines is not None:
-            completed = completed[:self.max_lines]
+        lines = self.max_lines if lines is None else lines
+        if lines is not None:
+            completed = completed[:lines]
         return self.history.render(instruction, completed)
 
     def _delayed(self, completed: list) -> list:

@@ -10,11 +10,12 @@ call, after the writer's before_call: when the count has grown since the keyfram
 the policy's wrist image, reported once) becomes the keyframe, and from then on every observation carries it as
 observation/memory_image, which the policy reads in its third image slot (the dataset: training/relabel_keyframe.py). Before
 the first event nothing is sent and the slot stays masked out, as on the training frames before the first event. A new
-episode clears the keyframe; events after the N-th (default: the task's history.max_lines) do not replace it. Mode off is
-the no-keyframe control: the keyframe is taken and logged, never sent. With --keyframe-placed-later the keyframe of a
-placing event (a skill of one of the task's placing verbs) waits for the hand to rise (placed.py).
+episode clears the keyframe; events after the N-th (default: the task's history.max_lines) do not replace it, and neither
+does the last skill of the episode's plan, which has no event in the training data. Mode off is the no-keyframe control: the
+keyframe is taken and logged, never sent. With --keyframe-placed-later the keyframe of a placing event (a skill of one of the
+task's placing verbs) waits for the hand to rise (placed.py).
 
-Every proxy log record carries keyframe_mode and, under "keyframe": source (the writer), events (the count, capped at N),
+Every proxy log record carries keyframe_mode and, under "keyframe": source (the writer), events (the count, capped as above),
 stored (a keyframe was taken at this call), event (the event of the current keyframe, None before the first), step
 (memory/step of the call it was taken at), sent (observation/memory_image went to the policy), and frame ("raw" or
 "fallback") at a call that stores one. With --keyframe-placed-later also placed_later: height (m above a resting cube, None
@@ -27,7 +28,7 @@ import logging
 
 import numpy as np
 
-from ..base import Method
+from ..base import Method, most_shown
 from ..memory_policy.query import wrist_frame
 from . import placed
 from .placed import PlacedLater
@@ -116,7 +117,7 @@ class KeyframeMethod(Method):
 
     def before_policy(self, observation: dict, control_keys: dict, writer) -> dict:
         """Take a keyframe when the event count has grown, and send the current one; the log record goes under "keyframe"."""
-        events = min(len(writer.completed()), self.max_events)
+        events = min(len(writer.completed()), most_shown(self.max_events, writer))
         record = {"source": writer.name, "events": events, "stored": False}
         if self.placed_later is None:
             if events > self.event:

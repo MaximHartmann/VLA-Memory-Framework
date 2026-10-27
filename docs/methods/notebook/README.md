@@ -3,15 +3,14 @@
 ## The idea
 
 A robot that works for one person should learn how that person wants things done, and should not need to be told again every
-day. An instruction only says what to do now. It cannot say "from now on", "only today" or "be more careful".
-
-Without a memory, the robot follows a wish only in the episode right after it was said. In our ten-day test it did so in 33
-of 72 episodes. A user who repeats every wish before every episode gets it followed every time, but has to type 3,376 words
-instead of 91.
+day. An instruction only says what to do now. It cannot say "from now on", "only today" or "be more careful". Without a
+memory, the robot follows a wish only in the episode right after it was said, and a user who wants it followed every time has
+to repeat every wish before every episode.
 
 The notebook keeps the wishes as short rules about the user. They are written once and read at the start of every episode by
-the VLM writer's planner. The notebook holds preferences (how the user wants the task done, said in words) and corrections
-(rules written after a failure). Nothing in the policy or in the planning model changes.
+the planner of the VLM writer (the writer that asks a vision-language model for the plan and for whether each skill is done).
+The notebook holds **preferences** (how the user wants the task done, said in words) and **corrections** (rules written after
+a failure). Nothing in the policy or in the planning model changes.
 
 Every rule has a **scope**, which decides where it acts. The scope decides, never a similarity search:
 
@@ -32,44 +31,41 @@ User profile (apply unless the instruction says otherwise):
 
 **Five rules keep it a profile and not a growing log:**
 
-- **Few rules per scope.** At most three active rules per scope reach the planner, ranked by importance, then by how recent they
-  are.
+- **Few rules per scope.** At most three active rules per scope reach the planner, ranked by importance, then by how recent
+  they are.
 - **A newer rule replaces an older one.** A message that contradicts a rule replaces it; the old rule stays in the file with the
   time it ended. A repetition confirms a rule. A withdrawal ("forget what I said about the order") retires it.
-- **Votes.** A rule's importance starts at 2. After an episode, a correction that was applied gains a point on success (up to 5)
-  and loses one on failure. At 0 it is retired. The robot's own failures never vote out a preference the user stated.
+- **Votes.** A rule's importance starts at 2. After an episode, a correction that was applied gains a point on success (up to
+  5) and loses one on failure. At 0 it is retired. The robot's own failures never vote out a preference the user stated.
 - **Validity.** A rule holds until it is withdrawn, for the day or for the session, as its words say ("today", "this time").
   The notebook keeps its own clock and checks validity at every episode start. A rule for the day that replaces a lasting one
   only hides it until the day is over.
-- **The instruction comes first.** If the instruction names any of the task's objects, it decides which objects are handled and
-  in which order. A plan rule that names objects is then held back for that episode (it is logged, not applied).
+- **The instruction comes first.** If the instruction names any of the task's objects, it decides which objects are handled
+  and in which order. A plan rule that names objects is then held back for that episode (it is logged, not applied).
 
 **Who writes it.** The planning model does, under JSON schemas built from the task's skills, so its answer can only be a rule
 the planner understands. It answers three questions: a user message becomes at most three rules; a failed episode's decision
 log becomes at most one correction; and a proposed rule is merged with the rules of its scope (add, update, delete or no
-change). This follows Mem0, a memory layer for language-model agents. The votes follow ExpeL, an agent that keeps rules and
-counts how often they helped. The way old rules are kept follows Zep, a memory that gives every fact a time of validity (the
-detailed page lists the papers). A gold writer answers the same questions from annotations, for tests.
+change). The merge follows Mem0, the votes follow ExpeL, and the way old rules are kept follows Zep, three memories for
+language-model agents (the detailed page lists the papers). A gold writer answers the same questions from annotations, for
+tests.
 
 **What it cannot do:**
 
 - **It acts only where the planner can.** It changes the plan, the completion rules and the planner's care. It cannot change
   how the arm moves or where a block is put down.
 - **It learns from words and failures only.** It does not infer a wish from what the user does.
-- **It cannot make the policy good at what the policy does badly.** Asked for the blue block first, the policy lifted blue
-  first in 18 of 20 episodes but completed both blocks in only 8. Following the user cost success: with the notebook 54 of 80
-  ten-day episodes were completed, without any memory 73.
-- **Corrections written from failures are weak.** The planning model finds the skill where an episode went wrong (14 of 17
-  failures) but restates the rule already in force instead of tightening it. The corrections in our tests came from annotations.
+- **It cannot make the policy good at what the policy does badly.** Following a wish for an order the policy was not trained
+  on cost success (see "Our findings").
+- **Corrections written from failures are weak.** The planning model finds the skill where an episode went wrong but restates
+  the rule already in force instead of tightening it. The corrections in our tests came from annotations.
 - **Votes see only outcomes.** They retired a correction that made every episode fail. But a rule the planner's model simply
   ignores causes no failure and is kept: votes cannot tell a rule that does nothing from one that helps.
-- **The planning model can misread a message.** It found all 16 rules in 18 test messages. But of four unusual ways to
-  withdraw a wish, two were understood and two gave no rule ("Never mind the order of the blocks, any order is fine." and the
-  bare "Forget it.").
+- **The planning model can misread a message.** Of four unusual ways to withdraw a wish, two were understood and two gave no
+  rule ("Never mind the order of the blocks, any order is fine." and the bare "Forget it.").
 - **One user, one task so far.** The ten-day test had a scripted user and the reference task.
 
-A walkthrough of how it works: the reasoning, the code path and how the notebook is written:
-[detailed/README.md](detailed/README.md).
+How it works in the code, and how the notebook is written: [detailed/README.md](detailed/README.md).
 
 ## Prerequisites
 
@@ -82,8 +78,8 @@ A walkthrough of how it works: the reasoning, the code path and how the notebook
 
 `--task task.yaml` names the task file. For the reference task it can be left out.
 
-Run the proxy with the VLM writer and the notebook. It re-reads the file at the start of every episode, so a writer may change
-it in between. `--profile-off` runs the same command line without the notebook:
+Run the proxy with the VLM writer and the notebook. It re-reads the file at the start of every episode, so a writer may
+change it in between. `--profile-off` runs the same command line without the notebook:
 
 ```
 python -m vla_memory.proxy --writer vlm --method subgoal --with notebook --profile notebook.json --task task.yaml \
@@ -132,9 +128,9 @@ block lifted first.
   words to the plan request instead of 42, and uses 26 model calls per episode instead of 34 (its "be quick" setting
   halves the questions from day 6 on). Settings such as "be quick" cannot be given in an instruction at all, so the
   other two score 0 on them by construction.
-- **Rules ended on time, and no rule acted where it must not.** The rule for the day ended at midnight, the rule for the session
-  with the session, and the withdrawal held for three days. In the two episodes whose instruction named both blocks, the
-  instruction's own order won. There was no false application in the 80 episodes.
+- **Rules ended on time, and no rule acted where it must not.** The rule for the day ended at midnight, the rule for the
+  session with the session, and the withdrawal held for three days. In the two episodes whose instruction named both blocks,
+  the instruction's own order won. There was no false application in the 80 episodes.
 - **A harmful rule retired itself.** The correction "count the red block as picked up only when the hand is at least 35 cm up"
   cannot be met (the hand rises to about 28 cm). It was applied in two episodes, both failed, and its importance went 2, 1, 0
   and it was retired. It was never applied again.
@@ -151,10 +147,10 @@ block lifted first.
 | the planner's rule for "picked up" asked only for a hand height of 19 cm, too early; a correction asked for 22 cm | success 19 of 20; the planner moved on when the hand was at a median 0.277 m | success 12 of 20; 0.235 m | |
 | an order rule, four unrelated messages, then a new order | plans followed 5 of 5 in all four phases, settings 5 of 5 once stated | | plans 5 of 5, settings 0 of 5 |
 
-- **The notebook is followed.** The plan rules, the presets and the corrections reached the planner in every episode. "Be quick"
-  cut the model calls per episode from 28.5 to 16.5 and the episode from 2.1 to 1.8 minutes at the same success. The
-  correction removed the early switches, those made before the block was 9 cm up (8 of 35 without it, 1 of 40 with it, and that
-  one in the first episode, before the correction existed).
+- **The notebook is followed.** The plan rules, the presets and the corrections reached the planner in every episode. "Be
+  quick" cut the model calls per episode from 28.5 to 16.5 and the episode from 2.1 to 1.8 minutes at the same success. The
+  correction removed the early switches, those made before the block was 9 cm up (8 of 35 without it, 1 of 40 with it, and
+  that one in the first episode, before the correction existed).
 - **Validity and precedence.** In the first version of the red-only test, the written rule was applied even to a control
   whose instruction named both blocks, and the blue block was dropped in 5 of 5 episodes. With validity and precedence the
   rerun followed the rule in 20 of 20 episodes, held it back in all 5 controls (both blocks planned and placed), and the next
@@ -163,11 +159,11 @@ block lifted first.
   first two episodes and was retired after the second. 7 of the 8 episodes after it succeeded, with the pick-up switches back
   at 0.281 m. A rule that loosens the criterion ("count it as picked up as soon as the gripper has closed") was ignored by the
   planner's model, caused no failure and was kept by the votes.
-- **The writer.** On 18 annotated messages with 16 rules, it found all 16 and wrote no other (precision and recall 16 of 16, no
-  rule from small talk or questions), merged all 16 as annotated and gave all 15 validities as annotated (all "until
-  withdrawn": these messages had no time words). On 20 messages with time cues over three days it was right on 16 of 16 rules
-  and validities, on 10 harder phrasings on 8 of 8. Distilled corrections found the skill where the episode went wrong in 14 of
-  17 failures, but restated the rule in force.
+- **The writer.** On 18 annotated messages with 16 rules, it found all 16 and wrote no other (precision and recall 16 of 16,
+  no rule from small talk or questions), merged all 16 as annotated and gave all 15 validities as annotated (all "until
+  withdrawn": these messages had no time words). On 20 messages with time cues over three days it was right on 16 of 16
+  rules and validities, on 10 harder phrasings on 8 of 8. Distilled corrections found the skill where the episode went wrong
+  in 14 of 17 failures, but restated the rule in force.
 - **The policy limits blue first.** Asked for blue first, the policy lifted blue first in 18 of 20 episodes and completed both
   blocks in 8. A likely reason, not tested: its demonstrations always took red first.
 - **Cost.** Reading the notebook takes 0.5 ms at an episode start and 0.2 ms per question to the planning model (measured with

@@ -110,13 +110,37 @@ annotations. Two example sessions are in `vla_memory/methods/notebook/sessions/`
 The VLM writer in its settled configuration drove the sub-goal policy in simulation (the planner loop). The planning
 model wrote the notebook.
 
-**Ten days with one user.** A scripted user, 80 episodes over ten days (8 a day), and nine messages: day 1 "double-check
-before you move on" (after the fourth episode), day 2 "from now on, blue first", day 3 "only red today", day 5 a correction
-that cannot be met (35 cm), day 6 "be quick" instead of double-checking, day 7 "forget blue first", day 8 two lines of
-small talk, day 10 "this time, blue first" (for one session). Three robots ran the same 80 episodes: with **the notebook**;
-with **no memory**, where a message goes in front of the next episode's instruction only; and with **the repeating user**,
-who types every wish so far in front of every instruction. We counted, per episode (fixed in writing before the first
-episode):
+**Ten days with one user.** A scripted user, 80 episodes over ten days, 8 a day. Every episode's instruction was "Pick up
+each block and put it back on the table.", except episodes 31 and 32, two controls whose instruction names both blocks:
+"Pick up the red block and put it back, then do the same with the blue block." The user sent nine messages:
+
+| day | episodes | what the user says before the day's episodes, word for word |
+|---|---|---|
+| 1 | 1-8 | after episode 4: "Please double-check before you move on to the next step." |
+| 2 | 9-16 | "From now on, please handle the blue block first." |
+| 3 | 17-24 | "Please only do the red block today." |
+| 4 | 25-32 | nothing |
+| 5 | 33-40 | "You keep moving on too early: count the red block as picked up only when the hand is at least 35 cm above the table." |
+| 6 | 41-48 | "No need to double-check any more, please be quick." |
+| 7 | 49-56 | "Forget what I said about doing the blue block first." |
+| 8 | 57-64 | "Thanks, the last few days went well." and "How long does one run take?" |
+| 9 | 65-72 | nothing |
+| 10 | 73-80 | "This time, please do the blue block first." A new session starts after episode 76. |
+
+Three robots ran the same 80 episodes. They differ only in how the user's messages reach them:
+
+- **The notebook:** the writer turns each message into rules once, and the planner reads the rules that hold at the start
+  of every episode.
+- **No memory:** a message is put in front of the instruction once, for the next episode only. On day 2 the first episode
+  gets "From now on, please handle the blue block first. Pick up each block and put it back on the table."; the other seven
+  get only "Pick up each block and put it back on the table."
+- **The repeating user:** before every episode the user types every wish said so far again, in front of the instruction;
+  only a wish for the day or the session drops out when it ends. By day 7 that is five sentences before every episode,
+  "from now on, blue first" and "forget what I said about blue first" among them.
+
+In all three the user's words reach only the planning model: inside the instruction, which it reads once per episode to
+make the plan, or through the notebook. The policy gets the same skill prompts in all three ("pick up the blue block");
+only which skills, and in which order, differ. We counted, per episode (fixed in writing before the first episode):
 
 - **Planned as asked:** the plan has the blocks and the order the user asked for: blue first on day 2, only red on day 3,
   red first again after "forget blue first". Counted from day 2 on, 72 episodes: before that the user had said nothing
@@ -127,12 +151,14 @@ episode):
 - **Task done:** every block in the plan was picked up and put back.
 - **Done the user's way:** the task done, planned as asked, and the plan's first block was also the first one lifted.
 
-| | the notebook | no memory | the repeating user |
+| measure | the notebook | no memory | the repeating user |
 |---|---|---|---|
-| planned as asked (of 72) | 72 | 33 | 72 |
-| checked as asked (of 76) | 76 | 0 | 0 |
-| task done (of 80) | 54 | 73 | 58 |
-| done the user's way (of 80) | 54 | 40 | 58 |
+| planned as asked | 72 of 72 | 33 of 72 | 72 of 72 |
+| checked as asked | 76 of 76 | 0 of 76 | 0 of 76 |
+| task done | 54 of 80 | 73 of 80 | 58 of 80 |
+| task done, plan starting with blue | 14 of 34 | 2 of 2 | 15 of 34 |
+| task done, plan starting with red | 40 of 46 | 71 of 78 | 43 of 46 |
+| done the user's way | 54 of 80 | 40 of 80 | 58 of 80 |
 | minutes per episode (median) | 3.8 | 4.4 | 4.6 |
 | model calls per episode (the plan and the questions) | 26 | 30 | 34 |
 | what the user typed in ten days | 9 messages, 91 words | 9 messages, 91 words | 280 messages, 3,376 words |
@@ -140,48 +166,22 @@ episode):
 - **The notebook follows the user as the repeating user does, with 91 words instead of 3,376.** Both planned as asked in
   all 72 episodes. Without memory the robot did so in 33: in the episode right after a message, and whenever the user
   wanted what it does anyway (red first, as on days 7 to 9).
-- **It is also the fastest.** Its episodes were the shortest and needed the fewest model calls, because from day 6 on "be
-  quick" halves the questions. Its plan request also grows by only 8.8 words, against the repeating user's 42. The writer
-  works between episodes: 1 to 19 seconds per message (median 6 s, 12 model calls for the 9 messages). The three robots ran
-  at the same time on one shared planning model, which then needed 3 to 5 seconds per question instead of 2.5, so every
-  episode here is slower than with a model of its own.
+- **Blue first is hard for the policy, whoever remembers the wish.** With a plan starting with blue the policy finished 14
+  and 15 of 34 episodes (the notebook's 14 include the two lost to the harmful rule, below), with a plan starting with red
+  40 and 43 of 46, likely because its demonstrations always took red first. The robot without memory planned blue first
+  only twice, right after a message. So it finished the most tasks, 73, but only 40 the way the user asked.
+- **The notebook is also the fastest.** Its episodes were the shortest and needed the fewest model calls, because from day 6 on "be
+  quick" halves the questions. It also gives the planning model the least extra text to read. Once per episode the planner
+  asks the model for the plan; the notebook adds its rules to that request, 17 words while a rule about the blocks holds
+  ("User profile (apply unless the instruction says otherwise): - Prioritize the blue block over the red block") and none
+  otherwise, 8.8 words per episode on average. The repeating user's sentences added 42.
+- **Time.** Reading the notebook takes about half a millisecond at an episode start. The writer works between episodes: 1
+  to 19 seconds per message (median 6 s; 12 model calls for the 9 messages). The three robots ran at the same time and
+  shared one planning model, which then needed 3 to 5 seconds per question instead of 2.5. So all episode times here are
+  longer than with a model of their own.
 - **Rules ended on time, and no rule acted where it must not.** The rule for the day ended at midnight, the rule for the
   session with the session, and the withdrawal held for three days. In the two episodes whose instruction named both blocks,
   the instruction's own order won. There was no false application in the 80 episodes.
 - **A harmful rule retired itself.** The correction "count the red block as picked up only when the hand is at least 35 cm up"
   cannot be met (the hand rises to about 28 cm). It was applied in two episodes, both failed, and its importance went 2, 1, 0
   and it was retired. It was never applied again.
-- **The robot that ignores the user completed the most.** It runs the red-first order the policy executes best. On the four
-  blue-first days the notebook completed 4, 4, 2 and 2 of 8 episodes, the repeating user 6, 3, 3 and 2 (day 5 includes the two
-  episodes lost to the harmful rule). That is the policy's limit, not the memory's.
-
-**Single sessions** (20 development seeds per condition, 5 per phase in the retention test):
-
-| test | with the notebook | without memory | restated in every instruction |
-|---|---|---|---|
-| "Please only do the red block today." | planned as asked 20 of 20, task done 20 of 20 | planned as asked 0 of 20, task done 18 of 20 | planned as asked 20 of 20, task done 20 of 20 |
-| "Please double-check ...", then "... please be quick." | checked as asked 20 of 20 and 20 of 20; task done 18 and 17 of 20 | task done 17 of 20 | |
-| the planner's rule for "picked up" asked only for a hand height of 19 cm, too early; a correction asked for 22 cm | task done 19 of 20; the planner moved on when the hand was at a median 0.277 m | task done 12 of 20; 0.235 m | |
-| an order rule, four unrelated messages, then a new order | planned as asked 5 of 5 in all four phases, checked as asked 5 of 5 once stated | | planned as asked 5 of 5, checked as asked 0 of 5 |
-
-- **The notebook is followed.** The plan rules, the presets and the corrections reached the planner in every episode. "Be
-  quick" cut the model calls per episode from 28.5 to 16.5 and the episode from 2.1 to 1.8 minutes at the same success. The
-  correction removed the early switches, those made before the block was 9 cm up (8 of 35 without it, 1 of 40 with it, and
-  that one in the first episode, before the correction existed).
-- **Validity and precedence.** In the first version of the red-only test, the written rule was applied even to a control
-  whose instruction named both blocks, and the blue block was dropped in 5 of 5 episodes. With validity and precedence the
-  rerun followed the rule in 20 of 20 episodes, held it back in all 5 controls (both blocks planned and placed), and the next
-  day the rule had ended (5 of 5 with both blocks).
-- **Votes retire a harmful rule.** An impossible correction ("only when the hand is at least 35 cm above the table") failed its
-  first two episodes and was retired after the second. 7 of the 8 episodes after it succeeded, with the pick-up switches back
-  at 0.281 m. A rule that loosens the criterion ("count it as picked up as soon as the gripper has closed") was ignored by the
-  planner's model, caused no failure and was kept by the votes.
-- **The writer.** On 18 annotated messages with 16 rules, it found all 16 and wrote no other (precision and recall 16 of 16,
-  no rule from small talk or questions), merged all 16 as annotated and gave all 15 validities as annotated (all "until
-  withdrawn": these messages had no time words). On 20 messages with time cues over three days it was right on 16 of 16
-  rules and validities, on 10 harder phrasings on 8 of 8. Distilled corrections found the skill where the episode went wrong
-  in 14 of 17 failures, but restated the rule in force.
-- **The policy limits blue first.** Asked for blue first, the policy lifted blue first in 18 of 20 episodes and completed both
-  blocks in 8. A likely reason, not tested: its demonstrations always took red first.
-- **Cost.** Reading the notebook takes 0.5 ms at an episode start and 0.2 ms per question to the planning model (measured with
-  10 entries). The writer needs about 1.5 model calls per message (27 calls for 18 messages).

@@ -10,67 +10,70 @@ The VLM writer decides at every policy call whether the current skill is done, a
 slow: a question takes the model about 0.7 s, and 2.9 s when four example pairs are attached, while a policy call takes only
 0.17 s. A memory of past moments can answer many of these questions by itself.
 
-The writer's long-term memory is a store of **moments** of past episodes. A moment is the two camera pictures of one policy
-call and what was true then: which skill was active, where each object was, whether the gripper was closed. At a call, the
-stored moments that look most like the current pictures are retrieved. They **vote** on the question: if none of them says
-"done", the model is not asked at all. The nearest of them are also shown to the model as examples, each with its right
-answer. "Looks most like" is measured with a **key**, a list of numbers per moment: by default a hand-made one, a coarse colour
-thumbnail of each picture plus the area and position of each object colour.
+**The memory.** It is a store of **moments** of past episodes. A moment is the two camera pictures of one policy call and
+what was true then: which skill was active, where each object was, whether the gripper was closed. At a call, the 6 stored
+moments that look most like the current pictures **vote**: if none of them says "done", the model is not asked at all. The
+4 nearest are also shown to the model as examples, each with its right answer.
 
-**Before the session store**, this memory was the **example store**: one array file (`--memory`), built once from recorded
-demonstrations and never changed. The session store takes its place. The planner reads it in exactly the same way: the 6
-nearest moments vote, the 4 nearest become the examples, and the same code writes them. What changes is where the moments
-come from and how they are kept:
+**The key.** To find the moments that look most like the current pictures among thousands, the store cannot compare the
+pictures pixel by pixel: that is slow, and a little change of light or position changes many pixels. So every moment gets a
+**key**, a short list of numbers that sums up its pictures. Two moments count as alike when their keys point the same way,
+and a **vector database** finds the nearest keys in milliseconds. There are two kinds:
+
+- **The colour key** (the default) is made by hand: a 12 × 16 colour thumbnail of each picture plus, for each object colour
+  of the task, how many pixels have it, where they are and how spread out. It says directly where the red and the blue
+  block are and whether one is in the gripper. It needs no model and takes 3 ms, but it only works with objects of clearly
+  different colours, which the task file names.
+- **A learned image key** comes from a network trained on millions of pictures (DINOv2 or SigLIP). It turns the pictures
+  into 384 numbers (DINOv2, the exterior picture) or 1,536 (SigLIP, both pictures) that describe what they show in
+  general. It needs no colours, so it could serve other scenes, but it also reacts to details that do not matter for the
+  task, and it takes 58 to 207 ms on the CPU.
+
+**Before the session store**, the memory was the **example store**: one array file (`--memory`), built once from recorded
+demonstrations and never changed. The planner reads the session store in exactly the same way: the same vote and the same
+examples, written by the same code. What changes is where the moments come from and how they are kept:
 
 | | the example store (`--memory`) | the session store (`--with session_store`) |
 |---|---|---|
-| read by the planner for | the vote and the examples | the same, in the same way |
-| kept in | one array file | a database directory (LanceDB: a directory of files, no server) |
 | the moments come from | recorded demonstrations, put in once by a script | the robot's own episodes, added after every episode; it can start from imported demonstrations |
 | labelled by | the demonstrations' own phases | the rules writer, replayed afterwards over the robot's gripper signals |
 | during a run | never changes | grows after every episode |
-| "looks most like" is measured by | the colour key | the colour key, or a learned image key |
+| kept in | one array file | a database directory (LanceDB: a directory of files, no server) |
+| the key | the colour key | the colour key, or a learned image key |
 | a lookup can be limited to | nothing: every moment counts | the same task, instruction, plan or session |
 | each moment also records | nothing more | where it came from, who labelled it, how often it was retrieved |
 | size | fixed | unbounded, or capped with a rule for what goes |
 
-So the session store is the same memory in a database (a **vector database**, which finds the rows whose key is nearest to a
-query key), plus a **write path** that fills it from the robot's own experience. One row of the database is one moment:
-
-```
-keys         the colour key (always), and optionally a DINOv2 ViT-S/14 embedding of the exterior picture
-             and a SigLIP embedding of the exterior and wrist pictures
-pictures     the exterior and the wrist picture (PNG)
-payload      session, task, instruction, plan, skill and its labels, time, episode and step, outcome of the episode,
-             provenance (demonstration, own rollout or correction), who labelled it
-use counters how often the moment was retrieved, and when last
-```
-
 ![The session store: what happens at every call, and when an episode ends](detailed/session_store_overview.svg)
 
-**Why these changes:**
+**What it gives over the example store:**
 
-- A learned image key (DINOv2, SigLIP: networks that turn a picture into a list of numbers) does not depend on object colours,
-  which a second task or a real robot would need.
-- Filters let one store serve many sessions and tasks without the moments of one misleading another.
-- Provenance lets a store that grows from the robot's own episodes be checked and pruned.
-- A cap keeps the store from growing without bound. Above it, the oldest moments go first (FIFO), or the least retrieved and,
-  among those, the oldest (use and recency).
-- A new episode is appended to the database. No file is rewritten.
+- **It needs no demonstrations.** It can start empty and fill itself from the robot's own episodes, on any task the rules
+  writer can label.
+- **It holds the robot's own situations,** slow and failed grasps included. A failed episode with right labels gives right
+  "not done" examples; demonstrations show only clean runs.
+- **It answers more of the checks by itself as it grows:** about a fifth in the first ten episodes, a third after about
+  twenty (findings below).
+- **It stays manageable.** Every moment records where it came from and who labelled it, so the store can be checked and
+  pruned. A lookup can be limited to the same task, instruction or session, so one store can serve many. A cap with a rule
+  for what goes keeps it from growing without end, and a new episode is appended without rewriting a file.
 
-**The write path.** During an episode, the pictures and the robot's gripper signals of every monitored call are kept. When
-the episode ends, the calls are labelled in hindsight by the rules writer, replayed over the robot's own signals (no simulator
-needed). Calls after the task is complete are left out, and so are near-duplicates within an episode. The rest is inserted
-with the database's keys, and then the cap, if there is one, is applied.
+**Where the labels come from.** A moment can only vote if it is labelled: which skill was active, and what was true then.
+During an episode the store keeps the pictures and the gripper signals of every call. When the episode ends, the calls are
+labelled in hindsight by the **rules writer**, replayed over the robot's own gripper signals. The labeller cannot be the
+planner itself: the store is there to check the planner, and every early "done" of the planner would be stored as a false
+"done" moment that then votes for more of them. The simulator's ground truth exists only in simulation. The rules writer
+needs neither a simulator nor a model, and it switches in the same policy call as the ground truth in 275 of 286 cases
+([its page](../../writers/rules/README.md)). Calls after the task was complete are left out, and so are near-duplicates: an
+episode keeps at most two calls with the same labels and almost the same colour key. The colour key decides this whatever
+key retrieves, because it is cheap and always stored, so every store keeps the same calls.
 
 **What it cannot do:**
 
-- **It did not raise the task success.** The live arms completed 88 to 94 of 100 episodes. The same writer with no store at
-  all completed 94 in an earlier run on other seeds, so this is only a rough comparison. What the store buys is fewer
-  questions to the planning model.
-- **The learned image keys were worse than the hand-made colour key** at finding the right skill, also when the camera had
-  moved. The colour key in turn needs clearly coloured objects; another scene may need a learned key (argued, not tested
-  here).
+- **It did not raise the task success, and it did not make the episodes shorter.** The five live runs completed 88 to 94
+  of 100 episodes; the VLM writer with no store completed 94 in an earlier run on other seeds. The store saves questions to
+  the planning model, but the questions that remain carry four examples each and take longer.
+- **The colour key needs clearly coloured objects.** A learned key needs none, but it was not tried in a live run.
 - **Search gets slow in a big store** (about 250 episodes give 10,000 moments). Beyond that the store needs an index or a cap.
 - **The labels are the rules writer's.** A moment is as right as the rules writer's reading of the robot's gripper signals. A
   task without grasps needs rules of the `signals` kind first. Moments are labelled in the task's order of skills, so an
@@ -91,7 +94,7 @@ How it works in the code, from the command line to the planner's questions and t
   `siglip` also need `torch` and `transformers` (`pip install -e '.[session_store_encoders]'`). The default colour key needs
   neither.
 - For `dinov2` and `siglip`, the encoder weights, downloaded once into the Hugging Face cache: `facebook/dinov2-small` and
-  `google/siglip-base-patch16-224`. They run on the CPU (about 20 to 60 ms per picture) or on a GPU.
+  `google/siglip-base-patch16-224`. They run on the CPU (58 ms for a DINOv2 key, 207 ms for a SigLIP key) or on a GPU.
 - Optional: an example store file (`scripts/build_exemplar_store.py`) to import as demonstrations. Otherwise the store starts
   empty and grows from the robot's own episodes.
 
@@ -136,34 +139,38 @@ for example to re-encode an existing store with another key and measure how well
 
 ## Our findings
 
-Measured with the sub-goal policy on the reference task (two blocks, picked up and put back in order) and the VLM writer with
-the vote; 100 episodes per live arm, 400 steps each, a store that starts empty. We asked three questions: does a learned key
-find moments of the right skill when the exterior camera has moved 5 cm; does the monitor keep its precision and its number of
-questions when unrelated sessions write into the same store; and is a capped store as good as an unbounded one? We also
-measured what a query and an insert cost as the store grows to 100,000 moments.
+Five live runs with the sub-goal policy on the reference task (two blocks, picked up and put back in order) and the VLM
+writer with the vote and the colour key. Each run had 100 episodes of 400 control steps and a store that started empty. In
+two runs, two other sessions wrote into the same store as well (20 episodes each with the instructions "only the red
+block" and "the blue block first"), once without and once with the filter "same instruction". Three runs tested a size cap
+of 1,000 moments: the least used go first, the oldest go first, or no cap. Per run we counted:
 
-- **Which key (offline).** The colour key finds the right skill more often than the learned image keys. The measure is
-  *recall@1*: the share of calls for which the single nearest stored moment belongs to the right skill. With the exterior
-  camera moved 5 cm it is 0.47 for the colour key, 0.19 for DINOv2 and 0.19 for SigLIP; with the camera where it was, 0.57,
-  0.38 and 0.57. The skill of the nearest moment changes in 39 % of the calls for DINOv2 from video compression alone (for the
-  colour key in 1.4 %). The live runs therefore all use the colour key.
-- **Moments from other sessions (live).** With 20 episodes each of two other instructions (the red block only, the blue block
-  first) writing into the store, 28 % of the retrieved moments came from those sessions. The monitor's "done" precision, the
-  share of its "done" answers that were right, stayed at 0.99 without a filter and at 0.98 with the filter "same instruction".
-  Those moments show the same skills with their correct outcome, so for this task the filter is not needed. It matters where
-  the same picture means a different answer under another instruction.
-- **Size cap (live).** A cap of 1,000 moments (about 24 episodes) costs no task success: 91 of 100 full tasks with
-  use-and-recency eviction, 94 with FIFO, 91 without a cap. Once the cap binds, FIFO makes the monitor ask more
-  questions than the uncapped store (more in 47 episodes, fewer in 22: a split that would be very unlikely if both asked
-  equally many). Use-and-recency does not (more in 41, fewer in 30: within noise).
-- **What the store does.** After about 20 episodes the vote decides a third of the monitor's checks without asking the
-  planning model (0.17 to 0.23 of the checks in the first 10 episodes, 0.31 to 0.42 later). The questions per episode fall
-  from about 32 to 36 to about 25 to 30, and no episode ended on a false completion.
-- **Cost.** The stores for these timings, on a CPU shared with other jobs, were grown synthetically from the 801 recorded
-  moments (their keys with a little noise). Putting an episode's 40 moments into the database takes about 15 ms once their
-  keys and pictures are ready. A search takes 10 ms at 1,000 moments, 25 ms at 10,000 and 212 ms at 100,000 with exact search
-  (with a filter 16, 34 and 302 ms), not counting the query's key. With an index on the DINOv2 key it stays at 15 to 17 ms and
-  finds every one of the 6 nearest. Computing one query's key on the CPU takes 3 ms for colour, 58 ms for DINOv2 and 207 ms
-  for SigLIP. On disk the store takes about 0.12 MB per moment at 100,000 moments (11.6 GB). In the live runs, the write at
-  the end of an episode, with all three keys computed on the CPU, took a median 10.7 s, nearly all of it the keys. It runs
-  when the next episode begins.
+- **Full tasks:** both blocks picked up and put back.
+- **Questions per episode:** how often the planner asked the planning model.
+- **"Done" precision:** of the planner's "done" verdicts, the share that were right.
+
+| run | full tasks | questions per episode | "done" precision | moments at the end | median episode |
+|---|---|---|---|---|---|
+| other sessions write in, no filter | 90 of 100 | 27.7 | 0.99 | 5,960 | 172 s |
+| other sessions write in, filter "same instruction" | 88 of 100 | 28.6 | 0.98 | 5,881 | 182 s |
+| cap of 1,000, the least used go first | 91 of 100 | 28.5 | 0.97 | 1,000 | 180 s |
+| cap of 1,000, the oldest go first | 94 of 100 | 28.8 | 0.95 | 1,000 | 183 s |
+| no cap | 91 of 100 | 27.7 | 0.97 | 3,983 | 179 s |
+
+- **The store takes over part of the model's work.** In the first ten episodes the vote settled 17 to 23 % of the
+  planner's checks without asking the model; after about twenty episodes, 31 to 42 %. The questions per episode fell from
+  32 to 36 to 25 to 30, and no episode ended on a false "done".
+- **Other sessions did not mislead it.** In the run without a filter, 28 % of the moments it retrieved came from the other
+  sessions, and its "done" precision stayed at 0.99 (0.98 with the filter). Those moments show the same skills with their
+  right outcome. A filter would matter where the same picture means a different answer under another instruction.
+- **A cap of 1,000 moments (about 24 episodes) cost no full tasks.** With the oldest going first, the planner asked more
+  questions once the cap was reached than without a cap (more in 47 episodes, fewer in 22, seed by seed); with the least
+  used going first it did not (41 and 30).
+- **Time.** Episodes took a median of about 3 minutes and did not get shorter as the store grew: the vote skips questions,
+  but the questions that remain carry four examples (2.9 s per question instead of 0.7 s). Up to two runs at a time shared
+  one planning model. Writing an episode into the store took a median 10.7 s, at the start of the next episode, nearly all
+  of it computing the learned keys, which these runs stored as well.
+- **A bigger store.** A search takes 10 ms at 1,000 moments, 25 ms at 10,000 and 212 ms at 100,000 (exact search on the
+  CPU, in stores grown to that size from recorded moments); an index on the DINOv2 key keeps it at 15 to 17 ms. A query's
+  key takes 3 ms for the colour key, 58 ms for DINOv2 and 207 ms for SigLIP. Inserting an episode takes 15 ms, and a moment
+  takes about 0.12 MB on disk.

@@ -101,11 +101,6 @@ seeds were not used to choose anything. A **full task** means: red picked up and
   moments against the four history runs): none shows a clear difference.
 - **Far better than the memoryless policy:** 78 against 11. The picture is the reason: without it the policy lifts red and
   holds it until the end.
-- **It grasps better than the history policy,** with 0.68 to 0.70 lifts per grasp attempt against 0.34 to 0.42, **and loses
-  that margin by grasping red again after placing it** (10 episodes with the simulator's events, 16 with the rules writer).
-  The cause is a "placed red" picture taken with the hand too low: in 60 of 187 episodes it was taken less than 8 cm above
-  the cube, and 25 of these 60 grasped red again; from 8 cm on, 1 of 127 did. The simulator's place event fires 6 cm above
-  the cube, while the training pictures show the hand about 10 cm up.
 - **The later "placed" picture removes the re-grasps but does not clearly raise the full tasks.** On 100 new seeds
   (2001-2100) the re-grasps fell from 17 of 94 episodes to 0 of 90 with the rules writer (a drop far too large to be
   chance) and from 5 of 92 to 1 of 89 with the simulator's events. The full tasks went from 74 to 82 with the rules
